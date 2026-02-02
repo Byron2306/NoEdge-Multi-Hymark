@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: homs
+Version: 3.0.0
+Summary: Hybrid Offline Marking System - NWU UTEW221
+Requires-Python: >=3.8
+Requires-Dist: pybryt>=0.7.0
+Requires-Dist: numpy>=1.21.0
+Requires-Dist: pandas>=1.3.0
+Requires-Dist: pyyaml>=5.4.0
+Requires-Dist: nbformat>=5.0.0
+Requires-Dist: nbconvert>=6.0.0
+Requires-Dist: jupyter_client>=6.0.0
