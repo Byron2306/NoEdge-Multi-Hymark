@@ -1262,6 +1262,15 @@ async def get_job_status(job_id: str):
     return job
 
 
+@app.get("/api/job/{job_id}/logs")
+async def get_job_logs(job_id: str):
+    """Get the logs for a job."""
+    job = jobs_collection.find_one({"job_id": job_id}, {"logs": 1, "_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"logs": job.get("logs", [])}
+
+
 @app.get("/api/jobs")
 async def list_jobs():
     """List all assessment jobs."""
@@ -1374,6 +1383,7 @@ class EfundiCredentials(BaseModel):
 class EfundiDownloadRequest(BaseModel):
     assignment_url: str
     rubric_id: str
+    assignment_name: str = None  # Optional: to find specific assignment by name
 
 
 @app.post("/api/efundi/authenticate")
@@ -1477,16 +1487,31 @@ async def efundi_download_and_assess(
     job_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     job = {
         "job_id": job_id,
-        "status": "downloading",
+        "status": "starting",
         "rubric_id": str(rubric["_id"]),
         "rubric_name": rubric["name"],
         "assignment_url": request.assignment_url,
+        "assignment_name": request.assignment_name,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "progress": 0,
         "total": 0,
-        "results": None
+        "results": None,
+        "logs": []
     }
     jobs_collection.insert_one(job)
+    
+    def update_job_log(message):
+        jobs_collection.update_one(
+            {"job_id": job_id},
+            {"$push": {"logs": {"time": datetime.now(timezone.utc).isoformat(), "message": message}}}
+        )
+        print(f"[Job {job_id}] {message}")
+    
+    def update_status(status):
+        jobs_collection.update_one(
+            {"job_id": job_id},
+            {"$set": {"status": status}}
+        )
     
     # Process in background
     async def download_and_process():
@@ -1495,63 +1520,243 @@ async def efundi_download_and_assess(
                 browser = await p.chromium.launch(headless=True)
                 context = await browser.new_context(storage_state=session["storage_state"])
                 page = await context.new_page()
+                page.set_default_timeout(60000)  # 60 second timeout
                 
-                # Navigate to assignment URL
-                await page.goto(request.assignment_url, wait_until="domcontentloaded")
-                await page.wait_for_timeout(3000)
+                update_job_log("Starting browser automation...")
+                update_status("navigating")
                 
-                jobs_collection.update_one(
-                    {"job_id": job_id},
-                    {"$set": {"status": "navigating"}}
-                )
+                assignment_url = request.assignment_url
+                assignment_name = request.assignment_name
                 
-                # Click Download All link
-                download_all = page.locator("a:has-text('Download All'), a.itemAction:has-text('Download')")
-                if await download_all.count() > 0:
-                    await download_all.first.click()
-                    await page.wait_for_timeout(2000)
+                # Step 1: Navigate to the site/tool URL
+                update_job_log(f"Navigating to: {assignment_url}")
+                await page.goto(assignment_url, wait_until="domcontentloaded")
+                await page.wait_for_timeout(4000)
                 
-                # Select options
-                all_checkbox = page.locator("input[type='checkbox']#selectall, input[value='all']")
+                # Save debug screenshot
+                debug_dir = OUTPUT_DIR / "debug"
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                await page.screenshot(path=str(debug_dir / f"{job_id}_01_initial.png"), full_page=True)
+                update_job_log("Saved initial page screenshot")
+                
+                # Step 2: Click on "Assignments" in the left sidebar if we're not already there
+                update_job_log("Looking for Assignments tab in sidebar...")
+                assignments_selectors = [
+                    "a.Mrphs-toolsNav__menuitem--link:has-text('Assignments')",
+                    "li a:has-text('Assignments')",
+                    ".Mrphs-toolsNav__menuitem span:has-text('Assignments')",
+                    "a[title*='Assignments']"
+                ]
+                
+                for selector in assignments_selectors:
+                    try:
+                        loc = page.locator(selector)
+                        if await loc.count() > 0:
+                            update_job_log(f"Found Assignments with: {selector}")
+                            await loc.first.click()
+                            await page.wait_for_timeout(3000)
+                            break
+                    except:
+                        continue
+                
+                await page.screenshot(path=str(debug_dir / f"{job_id}_02_assignments_tab.png"), full_page=True)
+                
+                # Step 3: Find the specific assignment and click "Grade"
+                # Assignments are typically shown in a list/table with actions like "Grade", "Edit", etc.
+                update_job_log(f"Looking for assignment to grade...")
+                update_status("finding_assignment")
+                
+                # If assignment name is provided, look for it specifically
+                if assignment_name:
+                    update_job_log(f"Looking for assignment: {assignment_name}")
+                    # First try to find the assignment row containing this name
+                    row_selector = f"tr:has-text('{assignment_name}')"
+                    row = page.locator(row_selector)
+                    
+                    if await row.count() > 0:
+                        update_job_log(f"Found assignment row with name: {assignment_name}")
+                        # Now find the Grade link within this row
+                        grade_in_row = row.locator("a:has-text('Grade')")
+                        if await grade_in_row.count() > 0:
+                            await grade_in_row.first.click()
+                            await page.wait_for_timeout(3000)
+                            update_job_log("Clicked Grade link for specific assignment")
+                        else:
+                            update_job_log("Grade link not found in row, trying general approach")
+                
+                # If no assignment name or specific grade not found, try to find any Grade link
+                grade_selectors = [
+                    "a.itemAction:has-text('Grade')",
+                    "a:has-text('Grade')",
+                    "td a:has-text('Grade')",
+                    "span.itemAction a:has-text('Grade')"
+                ]
+                
+                for selector in grade_selectors:
+                    try:
+                        loc = page.locator(selector)
+                        count = await loc.count()
+                        if count > 0:
+                            update_job_log(f"Found {count} Grade link(s) with: {selector}")
+                            # Click the first one (or we could make this smarter)
+                            await loc.first.click()
+                            await page.wait_for_timeout(3000)
+                            update_job_log("Clicked Grade link")
+                            break
+                    except:
+                        continue
+                
+                await page.screenshot(path=str(debug_dir / f"{job_id}_03_after_grade_click.png"), full_page=True)
+                
+                # Step 4: Now we should be on the grading page. Look for "Download All"
+                update_job_log("Looking for Download All link...")
+                update_status("finding_download")
+                
+                download_all_selectors = [
+                    "a:has-text('Download All')",
+                    "a.actionLink:has-text('Download')",
+                    "a[href*='downloadAll']",
+                    "span:has-text('Download All') a",
+                    ".navIntraTool a:has-text('Download')"
+                ]
+                
+                download_all_found = False
+                for selector in download_all_selectors:
+                    try:
+                        loc = page.locator(selector)
+                        if await loc.count() > 0:
+                            update_job_log(f"Found Download All with: {selector}")
+                            await loc.first.click()
+                            await page.wait_for_timeout(3000)
+                            download_all_found = True
+                            break
+                    except:
+                        continue
+                
+                if not download_all_found:
+                    # Maybe we're already on the download page, or it's in a different location
+                    update_job_log("Download All link not found with standard selectors")
+                    # Check if we can see the download options already
+                    if await page.locator("input#selectall, input[value='all']").count() > 0:
+                        update_job_log("Already on download options page")
+                        download_all_found = True
+                
+                await page.screenshot(path=str(debug_dir / f"{job_id}_04_download_page.png"), full_page=True)
+                
+                if not download_all_found:
+                    # Provide detailed error with page content
+                    page_title = await page.title()
+                    page_url = page.url
+                    update_job_log(f"Page title: {page_title}, URL: {page_url}")
+                    raise Exception(f"Could not find Download All. Check debug screenshots in {debug_dir}")
+                
+                # Step 5: Select download options
+                update_job_log("Selecting download options...")
+                update_status("selecting_options")
+                
+                # Check "All" checkbox
+                all_checkbox = page.locator("input#selectall, input[type='checkbox'][name='selectall'], input[value='all']")
                 if await all_checkbox.count() > 0:
                     await all_checkbox.first.check()
+                    update_job_log("Checked 'All' checkbox")
                 
-                csv_radio = page.locator("input[type='radio'][value='csv'], input:has-text('CSV')")
+                # Check "Student submission attachment(s)"
+                student_attach = page.locator("input#withSubmission, input[name='withSubmission']")
+                if await student_attach.count() > 0:
+                    await student_attach.first.check()
+                    update_job_log("Checked student submissions")
+                
+                # Check "Grade file"
+                grade_file = page.locator("input#withGrade, input[name='withGrade']")
+                if await grade_file.count() > 0:
+                    await grade_file.first.check()
+                    update_job_log("Checked grade file")
+                
+                # Select CSV format
+                csv_radio = page.locator("input[type='radio'][value='csv'], input#csvFormat")
                 if await csv_radio.count() > 0:
                     await csv_radio.first.check()
+                    update_job_log("Selected CSV format")
                 
-                # Include non-submitters
-                non_submit = page.locator("input[type='checkbox']:has-text('not yet submitted'), input#withoutSubmission")
+                # Check "Feedback comments"
+                feedback_comments = page.locator("input#withFeedbackText, input[name='withFeedbackText']")
+                if await feedback_comments.count() > 0:
+                    await feedback_comments.first.check()
+                    update_job_log("Checked feedback comments")
+                
+                # Check "Feedback Attachment(s)"
+                feedback_attach = page.locator("input#withFeedbackAttach, input[name='withFeedbackAttach']")
+                if await feedback_attach.count() > 0:
+                    await feedback_attach.first.check()
+                    update_job_log("Checked feedback attachments")
+                
+                # Check "Include students who have not yet submitted"
+                non_submit = page.locator("input#withoutSubmission, input[name='withoutSubmission']")
                 if await non_submit.count() > 0:
                     await non_submit.first.check()
+                    update_job_log("Checked include non-submitters")
                 
-                jobs_collection.update_one(
-                    {"job_id": job_id},
-                    {"$set": {"status": "downloading_zip"}}
-                )
+                await page.wait_for_timeout(1000)
+                await page.screenshot(path=str(debug_dir / f"{job_id}_05_options_selected.png"), full_page=True)
                 
-                # Download
-                download_btn = page.locator("button:has-text('Download'), input[type='submit'][value='Download']")
+                # Step 6: Click Download button
+                update_job_log("Clicking Download button...")
+                update_status("downloading_zip")
                 
                 zip_path = UPLOAD_DIR / f"efundi_{job_id}.zip"
                 
-                async with page.expect_download() as download_info:
-                    await download_btn.first.click()
-                download = await download_info.value
-                await download.save_as(str(zip_path))
+                # The download button is typically an input[type='submit'] or a button
+                download_btn_selectors = [
+                    "input[type='submit'][value='Download']",
+                    "input.active[type='submit']",
+                    "button:has-text('Download')",
+                    "form input[type='submit']",
+                    "input[name='eventSubmit_doDownload_all']"
+                ]
+                
+                download_btn = None
+                for selector in download_btn_selectors:
+                    try:
+                        loc = page.locator(selector)
+                        if await loc.count() > 0:
+                            download_btn = loc.first
+                            update_job_log(f"Found Download button with: {selector}")
+                            break
+                    except:
+                        continue
+                
+                if not download_btn:
+                    await page.screenshot(path=str(debug_dir / f"{job_id}_06_no_download_btn.png"), full_page=True)
+                    raise Exception("Could not find Download button")
+                
+                # Wait for download
+                try:
+                    async with page.expect_download(timeout=180000) as download_info:  # 3 min timeout
+                        await download_btn.click()
+                        update_job_log("Waiting for download to complete...")
+                    
+                    download = await download_info.value
+                    await download.save_as(str(zip_path))
+                    update_job_log(f"Downloaded ZIP to: {zip_path}")
+                except Exception as e:
+                    await page.screenshot(path=str(debug_dir / f"{job_id}_07_download_error.png"), full_page=True)
+                    raise Exception(f"Download failed: {e}")
                 
                 await browser.close()
                 
+                # Step 7: Process the downloaded ZIP
+                update_job_log("Processing downloaded submissions...")
+                update_status("processing")
                 jobs_collection.update_one(
                     {"job_id": job_id},
-                    {"$set": {"status": "processing", "zip_file": str(zip_path)}}
+                    {"$set": {"zip_file": str(zip_path)}}
                 )
                 
-                # Now process the downloaded ZIP
                 output_dir = OUTPUT_DIR / job_id
                 output_dir.mkdir(parents=True, exist_ok=True)
                 
                 results = process_efundi_zip(zip_path, rubric, output_dir)
+                update_job_log(f"Processed {results.get('submissions_processed', 0)} submissions")
                 
                 jobs_collection.update_one(
                     {"job_id": job_id},
@@ -1561,14 +1766,17 @@ async def efundi_download_and_assess(
                         "completed_at": datetime.now(timezone.utc).isoformat()
                     }}
                 )
+                update_job_log("Job completed successfully!")
                 
         except Exception as e:
-            print(f"[eFundi Download Error] {e}")
+            error_msg = str(e)
+            print(f"[eFundi Download Error] {error_msg}")
+            update_job_log(f"ERROR: {error_msg}")
             jobs_collection.update_one(
                 {"job_id": job_id},
                 {"$set": {
                     "status": "failed",
-                    "error": str(e),
+                    "error": error_msg,
                     "completed_at": datetime.now(timezone.utc).isoformat()
                 }}
             )

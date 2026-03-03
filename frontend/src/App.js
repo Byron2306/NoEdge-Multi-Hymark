@@ -316,9 +316,14 @@ function AssessmentDetailsModal({ assessment, onClose }) {
 
 // Job status card
 function JobCard({ job, onDownload, onUploadToEfundi }) {
+  const [showLogs, setShowLogs] = useState(false);
+  
   const statusIcons = {
+    starting: <RefreshCw size={18} className="spin" />,
     downloading: <RefreshCw size={18} className="spin" />,
     navigating: <RefreshCw size={18} className="spin" />,
+    finding_download: <RefreshCw size={18} className="spin" />,
+    selecting_options: <RefreshCw size={18} className="spin" />,
     downloading_zip: <RefreshCw size={18} className="spin" />,
     processing: <RefreshCw size={18} className="spin" />,
     completed: <CheckCircle size={18} />,
@@ -326,8 +331,11 @@ function JobCard({ job, onDownload, onUploadToEfundi }) {
   };
 
   const statusLabels = {
+    starting: 'Starting...',
     downloading: 'Downloading from eFundi...',
     navigating: 'Navigating to assignment...',
+    finding_download: 'Finding Download All...',
+    selecting_options: 'Selecting options...',
     downloading_zip: 'Downloading ZIP file...',
     processing: 'Processing submissions...',
     completed: 'Completed',
@@ -355,6 +363,29 @@ function JobCard({ job, onDownload, onUploadToEfundi }) {
           <span className="job-count">{job.results.submissions_processed} submissions</span>
         )}
       </div>
+      
+      {/* Logs toggle */}
+      {job.logs && job.logs.length > 0 && (
+        <div className="job-logs-section">
+          <button 
+            className="toggle-logs-btn"
+            onClick={() => setShowLogs(!showLogs)}
+          >
+            {showLogs ? 'Hide Logs' : 'Show Logs'} ({job.logs.length})
+          </button>
+          {showLogs && (
+            <div className="job-logs">
+              {job.logs.map((log, i) => (
+                <div key={i} className="log-entry">
+                  <span className="log-time">{new Date(log.time).toLocaleTimeString()}</span>
+                  <span className="log-message">{log.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      
       {job.status === 'completed' && (
         <div className="job-actions">
           <button 
@@ -403,6 +434,7 @@ function App() {
   const [efundiUsername, setEfundiUsername] = useState('');
   const [efundiPassword, setEfundiPassword] = useState('');
   const [assignmentUrl, setAssignmentUrl] = useState('');
+  const [assignmentName, setAssignmentName] = useState('');
 
   // Toast helpers
   const showToast = (message, type = 'info') => {
@@ -537,7 +569,8 @@ function App() {
     try {
       const result = await api.post('/api/efundi/download-and-assess', {
         assignment_url: assignmentUrl,
-        rubric_id: selectedRubric._id
+        rubric_id: selectedRubric._id,
+        assignment_name: assignmentName || null
       });
       showToast(`Job started: ${result.job_id}`, 'success');
       setActiveTab('jobs');
@@ -768,11 +801,22 @@ function App() {
                       <Link size={18} className="url-icon" />
                       <input
                         type="text"
-                        placeholder="Paste eFundi Assignment URL (e.g., https://efundi.nwu.ac.za/portal/site/.../tool/...)"
+                        placeholder="Paste eFundi Site URL (e.g., https://efundi.nwu.ac.za/portal/site/...)"
                         value={assignmentUrl}
                         onChange={(e) => setAssignmentUrl(e.target.value)}
                         className="form-input url-input"
                         data-testid="assignment-url"
+                      />
+                    </div>
+                    <div className="url-input-row">
+                      <FileText size={18} className="url-icon" />
+                      <input
+                        type="text"
+                        placeholder="Assignment Name (optional - to find specific assignment)"
+                        value={assignmentName}
+                        onChange={(e) => setAssignmentName(e.target.value)}
+                        className="form-input url-input"
+                        data-testid="assignment-name"
                       />
                     </div>
                     <button 
@@ -785,7 +829,7 @@ function App() {
                       Download & Assess All Submissions
                     </button>
                     <p className="help-text">
-                      This will automatically download all submissions, grade them with AI, add feedback annotations, and prepare a ZIP for upload.
+                      This will navigate to eFundi → Assignments → Grade → Download All → Process with AI → Package for upload.
                     </p>
                   </div>
                 )}
