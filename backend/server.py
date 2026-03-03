@@ -194,20 +194,28 @@ async def ai_parse_rubric(text: str, file_name: str) -> Dict[str, Any]:
     
     system_prompt = """You are an expert at parsing academic rubrics. Extract the rubric structure from the provided text.
 
-IMPORTANT: Pay close attention to the MARKS/WEIGHT for each criterion. Look for:
-- Numbers in brackets like [8 marks] or (10 marks)
-- Numbers at the end of criterion names
-- Mark allocations in tables
-- The total should add up correctly
+CRITICAL INSTRUCTIONS FOR EXTRACTING MARKS:
+1. Each criterion has a MAXIMUM mark value - this is its "weight"
+2. In rubric tables, the weight is usually the HIGHEST number in that criterion's row
+3. Common patterns:
+   - "Introduction & Conclusion (8 marks)" → weight = 8
+   - Table row: "8 | 6 | 4 | 2" → weight = 8 (the maximum)
+   - "Teaching Strategy (10)" → weight = 10
+   
+4. For the HISE312 AI Lesson Plan rubric specifically:
+   - Introduction & Conclusion = 8 marks (levels: 7-8, 5-6, 3-4, 0-2)
+   - Teaching Strategy & Approach = 10 marks (levels: 8-10, 6-7, 4-5, 0-3)
+   - Assessment & Resources = 7 marks (levels: 6-7, 4-5, 2-3, 0-1)
+   - Total = 25 marks
 
 You MUST respond with valid JSON in this exact format:
 {
     "name": "<rubric name>",
-    "total_marks": <number - this MUST equal the sum of all criteria weights>,
+    "total_marks": <number - MUST equal sum of all criteria weights>,
     "criteria": [
         {
             "name": "<criterion name - clean, without mark numbers>",
-            "weight": <max marks for this criterion - extract the ACTUAL number from the document>,
+            "weight": <MAXIMUM marks for this criterion - the highest score level>,
             "levels": {
                 "Excellent": {"description": "<description>", "min_score": <num>, "max_score": <num>},
                 "Good": {"description": "<description>", "min_score": <num>, "max_score": <num>},
@@ -218,12 +226,7 @@ You MUST respond with valid JSON in this exact format:
     ]
 }
 
-CRITICAL: 
-- The "weight" field must be the ACTUAL maximum marks for that criterion as specified in the document.
-- Do NOT guess or make up weights - extract them from the document.
-- If you see "Introduction & Conclusion (8 marks)" the weight should be 8.
-- If you see a table with marks like "8 | 6 | 4 | 2" the weight is the highest value (8).
-- total_marks MUST equal the sum of all criteria weights."""
+VALIDATION: The weight of each criterion should be the max_score of its "Excellent" level."""
 
     user_prompt = f"""Parse this rubric document and extract all criteria with their EXACT weights/marks as specified in the document.
 
@@ -245,12 +248,27 @@ IMPORTANT:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=0.2,
+            temperature=0.1,  # Lower temperature for more consistent parsing
             max_tokens=3000,
             response_format={"type": "json_object"}
         )
         
         result = json.loads(response.choices[0].message.content)
+        
+        # Post-process: Validate and fix total_marks
+        if result.get("criteria"):
+            calculated_total = sum(c.get("weight", 0) for c in result["criteria"])
+            
+            # If any criterion has suspiciously low weight (< 5), log warning
+            for c in result["criteria"]:
+                if c.get("weight", 0) < 5 and "introduction" not in c.get("name", "").lower():
+                    print(f"[Rubric Parse Warning] Low weight detected: {c.get('name')}: {c.get('weight')}")
+            
+            # Update total if mismatched
+            if abs(result.get("total_marks", 0) - calculated_total) > 0.5:
+                print(f"[Rubric Parse] Correcting total: {result.get('total_marks')} -> {calculated_total}")
+                result["total_marks"] = calculated_total
+        
         return result
         
     except Exception as e:
@@ -409,34 +427,43 @@ async def assess_with_ai(
     assignment_context = rubric.get("assignment_context", "")
     submission_requirements = rubric.get("submission_requirements", "")
     
-    system_prompt = """You are a RIGOROUS but FAIR academic assessor specializing in education methodology and History pedagogy. Your task is to thoroughly evaluate student submissions against the provided rubric.
+    system_prompt = """You are a RIGOROUS but FAIR academic assessor specializing in HISTORY EDUCATION and History pedagogy. Your task is to thoroughly evaluate student submissions against the provided rubric.
+
+SUBJECT-SPECIFIC FEEDBACK (HISTORY):
+Your feedback MUST address the following History-specific skills and concepts:
+- **Historical Thinking Skills**: Source analysis, causation, continuity/change, comparison, contextualization
+- **Historical Literacy**: Understanding of historical concepts, terminology, and methods
+- **Pedagogical Content Knowledge**: How well does the student translate historical understanding into effective teaching?
+- **Handling Sensitive Topics**: How does the student approach controversial historical events (colonialism, apartheid, genocide, etc.)?
+- **Historical Empathy**: Does the student help learners understand different perspectives from the past?
+- **Use of Primary/Secondary Sources**: Are historical sources used effectively in teaching?
+- **Chronological Understanding**: Is there clear temporal awareness and periodization?
+- **Historical Significance**: Does the student help identify why events/people matter?
 
 IMPORTANT GRADING GUIDELINES:
 - Aim for a CLASS AVERAGE around 65%, but with MEANINGFUL VARIATION between submissions.
 - Use the FULL RANGE of scores:
-  * 80-100%: Exceptional work - comprehensive, insightful, well-structured, few if any weaknesses
-  * 65-79%: Good/Proficient work - solid understanding, some minor gaps or areas for improvement  
-  * 50-64%: Satisfactory/Developing work - meets basic requirements but lacks depth or has notable weaknesses
-  * Below 50%: Inadequate work - significant gaps, missing components, or fundamental misunderstandings
-- DIFFERENTIATE between submissions: if one student provides deep analysis with specific examples and another gives superficial responses, their scores should reflect this difference significantly (10-20+ percentage points apart).
-- Do NOT cluster all scores in a narrow range. Some students deserve high marks, others deserve low marks.
-- Be specific about WHY you assigned the score you did.
+  * 80-100%: Exceptional work - demonstrates sophisticated historical understanding, excellent pedagogical application
+  * 65-79%: Good/Proficient work - solid grasp of historical concepts, competent teaching strategies
+  * 50-64%: Satisfactory/Developing work - basic historical understanding, generic teaching approaches
+  * Below 50%: Inadequate work - poor historical understanding, inappropriate teaching strategies
+- DIFFERENTIATE between submissions based on depth of historical understanding and quality of pedagogical application.
+- Be specific about WHY you assigned the score - reference specific historical concepts or teaching strategies.
 
 For each criterion in the rubric:
-1. Carefully assess the quality of work for that specific criterion
-2. Assign a score that reflects the actual quality - use the full range available
-3. Provide specific, constructive feedback with inline quotes from the submission
-4. Explain what would be needed for a higher score
+1. Assess both HISTORICAL UNDERSTANDING and PEDAGOGICAL APPLICATION
+2. Provide feedback that addresses History-specific skills
+3. Quote specific examples from the submission
+4. Explain what would improve the score in terms of historical content and teaching approach
 
 When assessing lesson plan critiques and improvements, look for:
-- Identification of specific flaws in the original AI-generated lesson plan (generic critiques = lower marks)
-- Clear explanation of WHY each flaw is problematic (not just stating it's a problem)
-- Practical, actionable improvements (vague suggestions = lower marks)
-- Attention to handling controversial/sensitive content in diverse classrooms
-- Progression from lower to higher order thinking in activities
-- Appropriate assessment alignment
-- Quality of the improved lesson plan template
-- Thoughtful reflection on changes made (superficial reflection = lower marks)
+- Does the critique identify HISTORICALLY PROBLEMATIC content (e.g., oversimplification, bias, missing perspectives)?
+- Does the student understand the HISTORIOGRAPHY of the topic?
+- Are the suggested activities appropriate for developing HISTORICAL THINKING SKILLS?
+- Does the improved plan address SENSITIVE HISTORICAL CONTENT appropriately for diverse South African classrooms?
+- Is there progression from LOWER to HIGHER ORDER HISTORICAL THINKING (recall → analysis → evaluation)?
+- Are HISTORICAL SOURCES used effectively in the teaching design?
+- Does the assessment align with CAPS/curriculum requirements for History?
 
 You MUST respond with valid JSON in this exact format:
 {
@@ -445,17 +472,17 @@ You MUST respond with valid JSON in this exact format:
         "<criterion_name>": {
             "level": "<level_name>",
             "score": <number - must be within the criterion's weight range>,
-            "feedback": "<detailed feedback with specific examples>",
+            "feedback": "<detailed feedback addressing HISTORICAL content and PEDAGOGICAL application>",
             "quotes": ["<relevant quote from submission>", ...]
         }
     },
-    "overall_feedback": "<comprehensive summary feedback>",
-    "strengths": ["<strength 1>", "<strength 2>"],
-    "areas_for_improvement": ["<area 1>", "<area 2>"],
+    "overall_feedback": "<summary addressing both historical understanding and teaching competence>",
+    "strengths": ["<strength related to History teaching>", "<strength related to historical understanding>"],
+    "areas_for_improvement": ["<improvement for historical content>", "<improvement for teaching approach>"],
     "annotations": [
         {
             "quote": "<exact text from submission>",
-            "comment": "<feedback comment>",
+            "comment": "<feedback on historical accuracy or pedagogical approach>",
             "type": "<praise|suggestion|correction|question>"
         }
     ]
