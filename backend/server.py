@@ -375,12 +375,26 @@ async def assess_with_ai(
             max_s = level_data.get("max_score", 0)
             rubric_description += f"  - {level_name} ({min_s}-{max_s}): {desc}\n"
     
-    system_prompt = """You are an expert academic assessor. Your task is to thoroughly evaluate student submissions against the provided rubric.
+    # Add assignment context if available
+    assignment_context = rubric.get("assignment_context", "")
+    submission_requirements = rubric.get("submission_requirements", "")
+    
+    system_prompt = """You are an expert academic assessor specializing in education methodology and History pedagogy. Your task is to thoroughly evaluate student submissions against the provided rubric.
 
 For each criterion in the rubric:
 1. Identify the most appropriate performance level based on the submission
 2. Assign a specific score within that level's range
 3. Provide specific, constructive feedback with inline quotes from the submission
+
+When assessing lesson plan critiques and improvements, look for:
+- Identification of specific flaws in the original AI-generated lesson plan
+- Clear explanation of WHY each flaw is problematic
+- Practical, actionable improvements
+- Attention to handling controversial/sensitive content in diverse classrooms
+- Progression from lower to higher order thinking in activities
+- Appropriate assessment alignment
+- Quality of the improved lesson plan template
+- Thoughtful reflection on changes made
 
 You MUST respond with valid JSON in this exact format:
 {
@@ -405,18 +419,24 @@ You MUST respond with valid JSON in this exact format:
     ]
 }"""
 
+    context_section = ""
+    if assignment_context:
+        context_section += f"\n## ASSIGNMENT CONTEXT\n{assignment_context}\n"
+    if submission_requirements:
+        context_section += f"\n## SUBMISSION REQUIREMENTS\n{submission_requirements}\n"
+    if assignment_instructions:
+        context_section += f"\n## ADDITIONAL INSTRUCTIONS\n{assignment_instructions}\n"
+
     user_prompt = f"""Please assess the following student submission against the rubric provided.
 
 ## RUBRIC
 {rubric_description}
-
-## ASSIGNMENT INSTRUCTIONS
-{assignment_instructions if assignment_instructions else "General academic essay"}
+{context_section}
 
 ## STUDENT SUBMISSION
 {submission_text[:15000]}  
 
-Provide a thorough assessment with specific feedback for each criterion. Include at least 3-5 annotations pointing to specific parts of the text."""
+Provide a thorough assessment with specific feedback for each criterion. Include at least 3-5 annotations pointing to specific parts of the text. Be fair but rigorous in your assessment."""
 
     try:
         response = openai_client.chat.completions.create(
