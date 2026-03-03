@@ -1627,22 +1627,82 @@ async def efundi_download_and_assess(
                 
                 await page.screenshot(path=str(debug_dir / f"{job_id}_02_assignments_tab.png"), full_page=True)
                 
-                # Step 3: On the Assignments page, look for "Download All" directly
-                # In eFundi, "Download All" is typically available from the assignments list page
-                update_job_log("Looking for Download All on assignments page...")
+                # Step 3: Find the specific assignment row and click "Grade" link
+                # The assignments are in a table with columns: Assignment Title, For, Status, Open Date, Due Date, In/New, Scale, Remove?
+                # Each row has links: Edit | Duplicate | Grade
+                update_job_log("Looking for assignment row to click Grade...")
+                update_status("finding_assignment")
+                
+                assignment_name = request.assignment_name
+                grade_clicked = False
+                
+                if assignment_name:
+                    update_job_log(f"Looking for assignment: {assignment_name}")
+                    
+                    # Find the table row containing this assignment name
+                    # Then find the "Grade" link within that row
+                    row_selectors = [
+                        f"tr:has-text('{assignment_name}')",
+                        f"tr:has(a:has-text('{assignment_name}'))",
+                        f"tr:has(td:has-text('{assignment_name}'))"
+                    ]
+                    
+                    for row_selector in row_selectors:
+                        try:
+                            row = page.locator(row_selector).first
+                            if await row.count() > 0:
+                                update_job_log(f"Found assignment row with: {row_selector}")
+                                
+                                # Now find the Grade link within this row
+                                grade_link = row.locator("a:has-text('Grade')")
+                                if await grade_link.count() > 0:
+                                    update_job_log("Found Grade link in row, clicking...")
+                                    await grade_link.click()
+                                    await page.wait_for_timeout(4000)
+                                    grade_clicked = True
+                                    update_job_log("Clicked Grade link successfully")
+                                    break
+                                else:
+                                    update_job_log("Grade link not found in this row")
+                        except Exception as e:
+                            update_job_log(f"Row selector error: {e}")
+                            continue
+                
+                # If no specific assignment or not found, try to click any Grade link
+                if not grade_clicked:
+                    update_job_log("Trying to find any Grade link...")
+                    grade_links = page.locator("a:has-text('Grade')")
+                    count = await grade_links.count()
+                    update_job_log(f"Found {count} Grade links on page")
+                    
+                    if count > 0:
+                        # Click the first Grade link (or last one for Assignment 1 which is typically at bottom)
+                        await grade_links.first.click()
+                        await page.wait_for_timeout(4000)
+                        grade_clicked = True
+                        update_job_log("Clicked first Grade link")
+                
+                if not grade_clicked:
+                    await page.screenshot(path=str(debug_dir / f"{job_id}_03_no_grade.png"), full_page=True)
+                    raise Exception("Could not find Grade link for any assignment")
+                
+                await page.screenshot(path=str(debug_dir / f"{job_id}_03_after_grade_click.png"), full_page=True)
+                update_job_log(f"Current URL after Grade click: {page.url}")
+                
+                # Step 4: Now we should be on the grading/submissions page
+                # Look for "Download All" link
+                update_job_log("Looking for Download All on grading page...")
                 update_status("finding_download")
                 
-                # First, check if Download All is directly visible on the page
                 download_all_found = False
                 download_all_selectors = [
+                    "a:has-text('Download All')",
                     "a.assignment-item:has-text('Download All')",
                     "a[href*='doPrep_download_all']",
-                    "a:has-text('Download All')",
                     "a[href*='downloadAll']",
                     "a.navIntraTool:has-text('Download')",
-                    "span:has-text('Download All')",
-                    "input[value='Download All']",
-                    "button:has-text('Download All')"
+                    "span:has-text('Download All') a",
+                    "input[value='Download All']"
                 ]
                 
                 for selector in download_all_selectors:
@@ -1657,50 +1717,8 @@ async def efundi_download_and_assess(
                             download_all_found = True
                             break
                     except Exception as e:
-                        update_job_log(f"Selector '{selector}' error: {e}")
+                        update_job_log(f"Selector error: {e}")
                         continue
-                
-                # If Download All not found, we might need to navigate to a specific assignment first
-                if not download_all_found:
-                    update_job_log("Download All not directly visible, looking for assignment...")
-                    
-                    assignment_name = request.assignment_name
-                    
-                    if assignment_name:
-                        update_job_log(f"Looking for assignment: {assignment_name}")
-                        
-                        # Try clicking on the assignment title
-                        title_selectors = [
-                            f"a:has-text('{assignment_name}')",
-                            f"h4:has-text('{assignment_name}') a",
-                            f"td:has-text('{assignment_name}') a"
-                        ]
-                        
-                        for selector in title_selectors:
-                            try:
-                                loc = page.locator(selector).first
-                                if await loc.count() > 0:
-                                    update_job_log(f"Clicking assignment: {selector}")
-                                    await loc.click()
-                                    await page.wait_for_timeout(3000)
-                                    break
-                            except:
-                                continue
-                        
-                        await page.screenshot(path=str(debug_dir / f"{job_id}_03_after_assignment_click.png"), full_page=True)
-                        
-                        # Now look for Download All again
-                        for selector in download_all_selectors:
-                            try:
-                                loc = page.locator(selector)
-                                if await loc.count() > 0:
-                                    update_job_log(f"Found Download All with: {selector}")
-                                    await loc.first.click()
-                                    await page.wait_for_timeout(3000)
-                                    download_all_found = True
-                                    break
-                            except:
-                                continue
                 
                 await page.screenshot(path=str(debug_dir / f"{job_id}_04_download_page.png"), full_page=True)
                 
