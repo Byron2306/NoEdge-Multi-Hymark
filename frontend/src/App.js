@@ -255,6 +255,134 @@ function JobResultsModal({ job, onClose, onDownload }) {
   );
 }
 
+// Live Progress Overlay for bulk assessment
+function LiveProgressOverlay({ jobId, progress, onClose }) {
+  const getScoreColor = (percentage) => {
+    if (percentage >= 75) return '#22c55e';
+    if (percentage >= 60) return '#84cc16';
+    if (percentage >= 50) return '#eab308';
+    return '#ef4444';
+  };
+
+  const assessments = progress?.results?.assessments || [];
+  const total = progress?.total || progress?.results?.total_submissions || 0;
+  const processed = progress?.progress || assessments.length;
+  const percentComplete = total > 0 ? (processed / total) * 100 : 0;
+
+  return (
+    <div className="live-progress-overlay" data-testid="live-progress-overlay">
+      <div className="live-progress-container">
+        <div className="live-progress-header">
+          <RefreshCw size={28} className="spin" style={{ color: '#e85d04' }} />
+          <h2>Processing Assessments</h2>
+        </div>
+
+        <div className="live-progress-stats">
+          <div className="live-stat">
+            <span className="live-stat-value">{processed}</span>
+            <span className="live-stat-label">Processed</span>
+          </div>
+          <div className="live-stat">
+            <span className="live-stat-value">{total}</span>
+            <span className="live-stat-label">Total</span>
+          </div>
+          <div className="live-stat">
+            <span className="live-stat-value">{percentComplete.toFixed(0)}%</span>
+            <span className="live-stat-label">Complete</span>
+          </div>
+        </div>
+
+        <div className="live-progress-bar-container">
+          <div className="live-progress-bar">
+            <div 
+              className="live-progress-fill" 
+              style={{ width: `${percentComplete}%` }}
+            />
+          </div>
+          <div className="live-progress-text">
+            <span>Job ID: {jobId}</span>
+            <span>{processed} of {total} submissions</span>
+          </div>
+        </div>
+
+        {progress?.current_student && (
+          <div className="live-current-student">
+            <h4>Currently Processing:</h4>
+            <p>Student {progress.current_student.id} - {progress.current_student.file}</p>
+          </div>
+        )}
+
+        {assessments.length > 0 && (
+          <div className="live-completed-list">
+            {assessments.slice(-5).reverse().map((a, i) => (
+              <div key={i} className="live-completed-item">
+                <span className="student-id">{a.student_id}</span>
+                <span 
+                  className="student-score" 
+                  style={{ backgroundColor: getScoreColor(a.percentage || 0) }}
+                >
+                  {a.total_score}/{progress?.results?.total_marks || 25} ({(a.percentage || 0).toFixed(0)}%)
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Rubric Detail Card with expandable criteria
+function RubricDetailCard({ rubric }) {
+  const [expandedCriterion, setExpandedCriterion] = useState(null);
+
+  return (
+    <div className="rubric-detail-card" data-testid={`rubric-detail-${rubric._id}`}>
+      <div className="rubric-detail-header">
+        <BookOpen size={24} />
+        <div>
+          <h3>{rubric.name}</h3>
+          <span className="rubric-meta">
+            {rubric.total_marks} total marks | {rubric.criteria?.length || 0} criteria
+          </span>
+        </div>
+      </div>
+      {rubric.criteria?.length > 0 && (
+        <div className="criteria-list">
+          <h4>Criteria (click to expand):</h4>
+          <div className="criteria-items">
+            {rubric.criteria.map((criterion, i) => (
+              <div key={i} className="criterion-item">
+                <div 
+                  className={`criterion-header ${expandedCriterion === i ? 'expanded' : ''}`}
+                  onClick={() => setExpandedCriterion(expandedCriterion === i ? null : i)}
+                >
+                  <ChevronRight size={16} className={`criterion-chevron ${expandedCriterion === i ? 'rotated' : ''}`} />
+                  <span className="criterion-name">{criterion.name}</span>
+                  <span className="criterion-weight">({criterion.weight} marks)</span>
+                </div>
+                {expandedCriterion === i && criterion.levels && (
+                  <div className="criterion-levels">
+                    {Object.entries(criterion.levels).map(([levelName, levelData]) => (
+                      <div key={levelName} className="level-row">
+                        <span className="level-name">{levelName}</span>
+                        <span className="level-score">
+                          {Number(levelData.min_score).toFixed(1)}-{Number(levelData.max_score).toFixed(1)}
+                        </span>
+                        <span className="level-description">{levelData.description}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // File upload dropzone
 function FileDropzone({ onFileSelect, accept, label, icon: Icon }) {
   const [isDragging, setIsDragging] = useState(false);
@@ -656,6 +784,10 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedAssessment, setSelectedAssessment] = useState(null);
   
+  // Live progress state
+  const [liveJob, setLiveJob] = useState(null);
+  const [liveProgress, setLiveProgress] = useState(null);
+  
   // eFundi state
   const [efundiAuth, setEfundiAuth] = useState(null);
   const [efundiUsername, setEfundiUsername] = useState('');
@@ -861,7 +993,35 @@ function App() {
       
       const result = await api.post('/api/assess/bulk', formData, true);
       showToast(`Bulk assessment started! Job ID: ${result.job_id}`, 'success');
-      loadJobs();
+      
+      // Start live monitoring
+      setLiveJob(result.job_id);
+      setLiveProgress({ status: 'starting', progress: 0, total: 0 });
+      
+      // Poll for updates
+      const pollInterval = setInterval(async () => {
+        try {
+          const jobData = await api.get(`/api/job/${result.job_id}`);
+          setLiveProgress(jobData);
+          
+          if (jobData.status === 'completed' || jobData.status === 'failed') {
+            clearInterval(pollInterval);
+            setLiveJob(null);
+            setLiveProgress(null);
+            loadJobs();
+            
+            if (jobData.status === 'completed') {
+              showToast(`Assessment complete! ${jobData.results?.submissions_processed || 0} submissions processed.`, 'success');
+              setActiveTab('jobs');
+            } else {
+              showToast(`Assessment failed: ${jobData.error}`, 'error');
+            }
+          }
+        } catch (e) {
+          console.error('Poll error:', e);
+        }
+      }, 2000);
+      
     } catch (error) {
       showToast(`Failed to start assessment: ${error.message}`, 'error');
     } finally {
@@ -1174,31 +1334,7 @@ function App() {
               ) : (
                 <div className="rubrics-list">
                   {rubrics.map(rubric => (
-                    <div key={rubric._id} className="rubric-detail-card" data-testid={`rubric-detail-${rubric._id}`}>
-                      <div className="rubric-detail-header">
-                        <BookOpen size={24} />
-                        <div>
-                          <h3>{rubric.name}</h3>
-                          <span className="rubric-meta">
-                            {rubric.total_marks} total marks | {rubric.criteria?.length || 0} criteria
-                          </span>
-                        </div>
-                      </div>
-                      {rubric.criteria?.length > 0 && (
-                        <div className="criteria-list">
-                          <h4>Criteria:</h4>
-                          <ul>
-                            {rubric.criteria.map((c, i) => (
-                              <li key={i}>
-                                <ChevronRight size={14} />
-                                <span className="criterion-name">{c.name}</span>
-                                <span className="criterion-weight">({c.weight} marks)</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
+                    <RubricDetailCard key={rubric._id} rubric={rubric} />
                   ))}
                 </div>
               )}
@@ -1267,6 +1403,15 @@ function App() {
           job={selectedJob}
           onClose={() => setSelectedJob(null)}
           onDownload={handleDownload}
+        />
+      )}
+
+      {/* Live Progress Overlay */}
+      {liveJob && liveProgress && (
+        <LiveProgressOverlay
+          jobId={liveJob}
+          progress={liveProgress}
+          onClose={() => { setLiveJob(null); setLiveProgress(null); }}
         />
       )}
     </div>

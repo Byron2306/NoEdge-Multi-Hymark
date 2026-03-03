@@ -1681,3 +1681,245 @@
   font-size: 0.8rem;
   font-weight: 600;
 }
+
+/* Expandable Rubric Criteria */
+.criteria-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.criterion-item {
+  background: rgba(30, 58, 95, 0.2);
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.criterion-item:hover {
+  border-color: #1e3a5f;
+}
+
+.criterion-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.criterion-header:hover {
+  background: rgba(30, 58, 95, 0.4);
+}
+
+.criterion-header.expanded {
+  background: rgba(232, 93, 4, 0.1);
+  border-bottom: 1px solid #1e3a5f;
+}
+
+.criterion-chevron {
+  color: #8fa3b8;
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.criterion-chevron.rotated {
+  transform: rotate(90deg);
+  color: #e85d04;
+}
+
+.criterion-header .criterion-name {
+  flex: 1;
+  color: #e8eef4;
+  font-size: 0.9rem;
+}
+
+.criterion-header .criterion-weight {
+  color: #e85d04;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.criterion-levels {
+  padding: 0.75rem;
+  background: rgba(10, 22, 40, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.level-row {
+  display: grid;
+  grid-template-columns: 140px 80px 1fr;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  background: rgba(30, 58, 95, 0.2);
+  border-radius: 4px;
+  align-items: center;
+}
+
+.level-name {
+  color: #e8eef4;
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+
+.level-score {
+  color: #e85d04;
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-align: center;
+  background: rgba(232, 93, 4, 0.15);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.level-description {
+  color: #8fa3b8;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+/* Live Progress Monitoring */
+.live-progress-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(10, 22, 40, 0.95);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.live-progress-container {
+  max-width: 800px;
+  width: 100%;
+  background: rgba(20, 34, 56, 0.9);
+  border: 1px solid #1e3a5f;
+  border-radius: 12px;
+  padding: 2rem;
+}
+
+.live-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.live-progress-header h2 {
+  color: #e8eef4;
+  font-size: 1.5rem;
+  margin: 0;
+}
+
+.live-progress-stats {
+  display: flex;
+  gap: 2rem;
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: rgba(30, 58, 95, 0.3);
+  border-radius: 8px;
+}
+
+.live-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.live-stat-value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #e85d04;
+}
+
+.live-stat-label {
+  font-size: 0.8rem;
+  color: #8fa3b8;
+  text-transform: uppercase;
+}
+
+.live-progress-bar-container {
+  margin-bottom: 1.5rem;
+}
+
+.live-progress-bar {
+  height: 12px;
+  background: #1e3a5f;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.live-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #e85d04, #f97316);
+  border-radius: 6px;
+  transition: width 0.5s ease;
+}
+
+.live-progress-text {
+  display: flex;
+  justify-content: space-between;
+  color: #8fa3b8;
+  font-size: 0.9rem;
+}
+
+.live-current-student {
+  padding: 1rem;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+
+.live-current-student h4 {
+  color: #3b82f6;
+  font-size: 0.9rem;
+  margin: 0 0 0.5rem 0;
+}
+
+.live-current-student p {
+  color: #e8eef4;
+  margin: 0;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.live-completed-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+}
+
+.live-completed-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid #1e3a5f;
+}
+
+.live-completed-item:last-child {
+  border-bottom: none;
+}
+
+.live-completed-item .student-id {
+  color: #e8eef4;
+  font-size: 0.85rem;
+}
+
+.live-completed-item .student-score {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.8rem;
+}

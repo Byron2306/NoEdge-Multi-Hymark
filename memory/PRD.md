@@ -64,15 +64,12 @@ Frontend (React)         Backend (FastAPI)          Database (MongoDB)
 - [x] **Expandable student details** - Click to see strengths, improvements, overall feedback
 - [x] **Group member badges** - Shows group submissions with member count
 - [x] **Stats dashboard** - Shows average, range, pass rate for each job
-- [x] **Rubric criteria viewer** - Shows all criteria with mark allocations
+- [x] **Expandable Rubric Criteria** - Click criteria to see level descriptions and score ranges
+- [x] **Live Progress Monitoring** - Real-time progress overlay during bulk assessment
 
-### Frontend Features
-- [x] Modern dark-themed UI with responsive design
-- [x] File upload dropzones (drag & drop)
-- [x] Rubric selection and management
-- [x] Assessment details modal with full feedback
-- [x] Job status monitoring
-- [x] Download results functionality
+### Backend Features (New)
+- [x] **PDF Annotation Support** - Using PyMuPDF to annotate PDFs with scores and feedback
+- [x] **Live Job Progress** - Real-time updates to database during processing
 
 ### AI Integration
 - [x] GPT-4o for essay assessment

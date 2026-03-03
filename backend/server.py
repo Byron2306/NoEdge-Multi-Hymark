@@ -54,6 +54,12 @@ try:
 except ImportError:
     PDF_AVAILABLE = False
 
+try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+except ImportError:
+    PYMUPDF_AVAILABLE = False
+
 # MongoDB setup
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "smart_assessor")
@@ -709,6 +715,114 @@ def create_feedback_txt(output_path: Path, assessment: Dict[str, Any]) -> bool:
         return False
 
 
+def annotate_pdf_with_feedback(
+    original_path: Path,
+    output_path: Path,
+    annotations: List[Dict[str, Any]],
+    overall_feedback: str,
+    criteria_scores: Dict[str, Any] = None,
+    total_score: float = 0,
+    total_marks: float = 25
+) -> bool:
+    """Annotate a PDF document with assessment feedback using PyMuPDF."""
+    
+    if not PYMUPDF_AVAILABLE:
+        print("[PDF Annotation] PyMuPDF not available, falling back to text feedback")
+        return False
+    
+    try:
+        # Open the PDF
+        doc = fitz.open(str(original_path))
+        
+        # Create a new page at the beginning for feedback summary
+        # We'll insert a page and add text to it
+        
+        # First, let's add sticky note annotations to the first page
+        first_page = doc[0]
+        
+        # Add a header annotation at the top of first page
+        percentage = (total_score / total_marks * 100) if total_marks > 0 else 0
+        header_text = f"""ASSESSMENT FEEDBACK
+Score: {total_score}/{total_marks} ({percentage:.1f}%)
+
+{overall_feedback[:500]}"""
+        
+        # Insert text annotation (sticky note) at top left
+        rect = fitz.Rect(10, 10, 250, 30)
+        first_page.add_text_annot(
+            rect.tl,  # top-left point
+            header_text,
+            icon="Note"
+        )
+        
+        # Add colored rectangle with score at top
+        score_rect = fitz.Rect(10, 10, 200, 50)
+        score_color = (0.2, 0.7, 0.3) if percentage >= 50 else (0.9, 0.2, 0.2)
+        shape = first_page.new_shape()
+        shape.draw_rect(score_rect)
+        shape.finish(color=(0.8, 0, 0), fill=None, width=2)
+        shape.commit()
+        
+        # Insert score text
+        first_page.insert_text(
+            fitz.Point(15, 35),
+            f"SCORE: {total_score}/{total_marks} ({percentage:.1f}%)",
+            fontsize=14,
+            color=(0.8, 0, 0),
+            fontname="helv"
+        )
+        
+        # Add criteria scores as annotations on first page
+        if criteria_scores:
+            y_pos = 60
+            for crit_name, crit_data in criteria_scores.items():
+                score_text = f"{crit_name}: {crit_data.get('score', 0)} - {crit_data.get('level', 'N/A')}"
+                first_page.insert_text(
+                    fitz.Point(15, y_pos),
+                    score_text,
+                    fontsize=9,
+                    color=(0.5, 0, 0),
+                    fontname="helv"
+                )
+                y_pos += 15
+        
+        # Add annotations throughout the document
+        for i, ann in enumerate(annotations):
+            quote = ann.get("quote", "")
+            comment = ann.get("comment", "")
+            ann_type = ann.get("type", "suggestion")
+            
+            # Search for the quote in all pages
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text_instances = page.search_for(quote[:50] if len(quote) > 50 else quote)
+                
+                if text_instances:
+                    # Add highlight annotation
+                    for inst in text_instances[:1]:  # Only highlight first instance
+                        highlight = page.add_highlight_annot(inst)
+                        highlight.set_colors(stroke=(1, 0.8, 0))  # Yellow highlight
+                        highlight.update()
+                        
+                        # Add comment annotation next to highlighted text
+                        ann_text = f"[{i+1}] ({ann_type.upper()})\n{comment}"
+                        page.add_text_annot(inst.tl, ann_text, icon="Comment")
+                    break
+        
+        # Save the annotated PDF
+        doc.save(str(output_path))
+        doc.close()
+        
+        print(f"[PDF Annotated] {output_path}")
+        return True
+        
+    except Exception as e:
+        print(f"[PDF Annotation Error] {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 # ===================== EFUNDI ZIP HANDLING =====================
 
 def extract_student_id(folder_name: str) -> Optional[str]:
@@ -780,14 +894,18 @@ def get_first_page_text(file_path: Path) -> str:
 async def process_efundi_zip(
     zip_path: Path,
     rubric: Dict[str, Any],
-    output_dir: Path
+    output_dir: Path,
+    progress_callback: callable = None
 ) -> Dict[str, Any]:
     """Process an eFundi assignment zip file and assess all submissions."""
     
     results = {
         "job_id": datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"),
         "submissions_processed": 0,
+        "total_submissions": 0,
+        "total_marks": rubric.get("total_marks", 25),
         "assessments": [],
+        "current_student": None,
         "grades_csv_path": None,
         "output_zip_path": None
     }
@@ -833,29 +951,42 @@ async def process_efundi_zip(
         feedback_files = {}  # student_folder_name -> [(source_path, dest_filename)]
         comments_map = {}  # student_id -> comment text
         
+        # Count total student folders with submissions first
+        student_folders_to_process = []
         for student_folder in root_dir.iterdir():
             if not student_folder.is_dir():
                 continue
-            
             student_id = extract_student_id(student_folder.name)
             if not student_id:
                 continue
-            
-            # Find submission files
             submission_dir = student_folder / "Submission attachment(s)"
             if not submission_dir.exists():
                 submission_dir = student_folder
-            
             submission_files = list(submission_dir.glob("*.docx")) + \
                               list(submission_dir.glob("*.pdf")) + \
                               list(submission_dir.glob("*.doc"))
+            if submission_files:
+                student_folders_to_process.append((student_folder, student_id, submission_files[0]))
+        
+        results["total_submissions"] = len(student_folders_to_process)
+        print(f"[Found {len(student_folders_to_process)} submissions to process]")
+        
+        # Call progress callback with initial state
+        if progress_callback:
+            await progress_callback(results)
+        
+        for idx, (student_folder, student_id, submission_file) in enumerate(student_folders_to_process):
+            # Update current student being processed
+            results["current_student"] = {
+                "id": student_id,
+                "file": submission_file.name,
+                "index": idx + 1
+            }
             
-            if not submission_files:
-                print(f"[Skipping] No submissions for {student_id}")
-                continue
+            if progress_callback:
+                await progress_callback(results)
             
-            # Process first valid submission
-            submission_file = submission_files[0]
+            # Extract text from submission
             submission_text = extract_document_content(submission_file)
             
             if not submission_text.strip():
@@ -926,10 +1057,28 @@ async def process_efundi_zip(
                     print(f"[Annotated] {annotated_path}")
             
             elif submission_file.suffix.lower() == '.pdf':
-                # For PDFs, create a feedback text file since we can't annotate PDFs easily
-                feedback_txt_path = feedback_folder / f"{submission_file.stem}_FEEDBACK.txt"
-                create_feedback_txt(feedback_txt_path, assessment)
-                feedback_files[student_folder.name].append(feedback_txt_path)
+                # Try to annotate PDF with PyMuPDF
+                annotated_filename = submission_file.name  # Keep same name as original
+                annotated_path = feedback_folder / annotated_filename
+                
+                success = annotate_pdf_with_feedback(
+                    submission_file,
+                    annotated_path,
+                    assessment.get("annotations", []),
+                    assessment.get("overall_feedback", ""),
+                    assessment.get("criteria_scores", {}),
+                    total_score,
+                    total_possible
+                )
+                
+                if success:
+                    feedback_files[student_folder.name].append(annotated_path)
+                    print(f"[PDF Annotated] {annotated_path}")
+                else:
+                    # Fallback to text file if PDF annotation fails
+                    feedback_txt_path = feedback_folder / f"{submission_file.stem}_FEEDBACK.txt"
+                    create_feedback_txt(feedback_txt_path, assessment)
+                    feedback_files[student_folder.name].append(feedback_txt_path)
             
             # Create/update comments.txt with the overall feedback
             comments_txt = f"""Score: {total_score}/{total_possible} ({percentage:.1f}%)
@@ -956,6 +1105,11 @@ CRITERIA BREAKDOWN:
             
             results["assessments"].append(assessment)
             results["submissions_processed"] += 1
+            results["current_student"] = None  # Clear current student after processing
+            
+            # Report progress after each assessment
+            if progress_callback:
+                await progress_callback(results)
         
         # Add comments for group members in their respective folders
         for member_id, grade_info in group_grades_map.items():
@@ -1497,7 +1651,19 @@ async def assess_bulk_zip(
             output_dir = OUTPUT_DIR / job_id
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            results = await process_efundi_zip(zip_path, rubric, output_dir)
+            # Progress callback to update job in real-time
+            async def update_progress(results):
+                jobs_collection.update_one(
+                    {"job_id": job_id},
+                    {"$set": {
+                        "progress": results.get("submissions_processed", 0),
+                        "total": results.get("total_submissions", 0),
+                        "current_student": results.get("current_student"),
+                        "results": results
+                    }}
+                )
+            
+            results = await process_efundi_zip(zip_path, rubric, output_dir, update_progress)
             
             jobs_collection.update_one(
                 {"job_id": job_id},
