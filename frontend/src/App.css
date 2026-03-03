@@ -1246,3 +1246,438 @@
     font-size: 2.5rem;
   }
 }
+
+/* Job Results Modal Styles */
+.modal-large {
+  max-width: 900px;
+  width: 95%;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-large .modal-body {
+  overflow-y: auto;
+  flex: 1;
+  padding: 0;
+}
+
+.results-stats-bar {
+  display: flex;
+  justify-content: space-around;
+  padding: 1rem;
+  background: rgba(30, 58, 95, 0.3);
+  border-bottom: 1px solid #1e3a5f;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #e8eef4;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: #8fa3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.students-list {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.student-result-card {
+  background: rgba(20, 34, 56, 0.8);
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.student-result-card.expanded {
+  border-color: #e85d04;
+}
+
+.student-result-header {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  gap: 1rem;
+}
+
+.student-result-header:hover {
+  background: rgba(30, 58, 95, 0.3);
+}
+
+.student-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.student-rank {
+  color: #8fa3b8;
+  font-size: 0.85rem;
+  font-weight: 600;
+  min-width: 30px;
+}
+
+.student-id {
+  font-weight: 600;
+  color: #e8eef4;
+}
+
+.group-badge {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  background: rgba(232, 93, 4, 0.2);
+  color: #e85d04;
+  border-radius: 4px;
+}
+
+.student-score {
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  color: white;
+  font-weight: 600;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.score-pct {
+  opacity: 0.8;
+  font-size: 0.8rem;
+}
+
+.expand-icon {
+  color: #8fa3b8;
+  transition: transform 0.2s ease;
+}
+
+.expand-icon.rotated {
+  transform: rotate(90deg);
+}
+
+.student-result-details {
+  padding: 1rem;
+  background: rgba(10, 22, 40, 0.5);
+  border-top: 1px solid #1e3a5f;
+}
+
+.criteria-breakdown {
+  margin-bottom: 1rem;
+}
+
+.criteria-breakdown h4 {
+  color: #e8eef4;
+  font-size: 0.9rem;
+  margin-bottom: 0.75rem;
+}
+
+.criterion-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  background: rgba(30, 58, 95, 0.2);
+  border-radius: 4px;
+  margin-bottom: 0.5rem;
+  align-items: center;
+}
+
+.criterion-row .criterion-name {
+  color: #e8eef4;
+  font-size: 0.85rem;
+}
+
+.criterion-row .criterion-level {
+  color: #8fa3b8;
+  font-size: 0.75rem;
+  background: rgba(30, 58, 95, 0.5);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+}
+
+.criterion-row .criterion-score {
+  color: #e85d04;
+  font-weight: 600;
+}
+
+.criterion-row .criterion-feedback {
+  grid-column: 1 / -1;
+  color: #8fa3b8;
+  font-size: 0.8rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #1e3a5f;
+}
+
+.feedback-section {
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  border-radius: 6px;
+}
+
+.feedback-section h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #e8eef4;
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+.feedback-section.strengths {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+.feedback-section.strengths h4 {
+  color: #22c55e;
+}
+
+.feedback-section.improvements {
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.2);
+}
+
+.feedback-section.improvements h4 {
+  color: #eab308;
+}
+
+.feedback-section ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.feedback-section li {
+  padding: 0.25rem 0;
+  padding-left: 1rem;
+  position: relative;
+  color: #8fa3b8;
+  font-size: 0.85rem;
+}
+
+.feedback-section li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: inherit;
+}
+
+.overall-feedback {
+  padding: 0.75rem;
+  background: rgba(30, 58, 95, 0.2);
+  border-radius: 6px;
+  margin-bottom: 1rem;
+}
+
+.overall-feedback h4 {
+  color: #e8eef4;
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+.overall-feedback p {
+  color: #8fa3b8;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.group-members {
+  padding: 0.75rem;
+  background: rgba(232, 93, 4, 0.1);
+  border: 1px solid rgba(232, 93, 4, 0.2);
+  border-radius: 6px;
+}
+
+.group-members h4 {
+  color: #e85d04;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+
+.member-ids {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.member-id {
+  padding: 0.25rem 0.5rem;
+  background: rgba(232, 93, 4, 0.2);
+  border-radius: 4px;
+  color: #e8eef4;
+  font-size: 0.8rem;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-top: 1px solid #1e3a5f;
+  background: rgba(20, 34, 56, 0.5);
+}
+
+.btn-secondary {
+  padding: 0.75rem 1.5rem;
+  background: transparent;
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  color: #8fa3b8;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-secondary:hover {
+  background: #1e3a5f;
+  color: #e8eef4;
+}
+
+.btn-primary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  background: linear-gradient(135deg, #e85d04 0%, #f97316 100%);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(232, 93, 4, 0.4);
+}
+
+/* Job Progress */
+.job-progress {
+  padding: 0.75rem;
+  background: rgba(30, 58, 95, 0.3);
+  border-radius: 6px;
+  margin-top: 0.5rem;
+}
+
+.progress-bar {
+  height: 6px;
+  background: #1e3a5f;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #e85d04, #f97316);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  display: block;
+  margin-top: 0.5rem;
+  color: #8fa3b8;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+/* Job Stats */
+.job-stats {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.job-stats .stat {
+  font-size: 0.8rem;
+  color: #8fa3b8;
+  background: rgba(30, 58, 95, 0.3);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+/* View Details Button */
+.view-details-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: rgba(59, 130, 246, 0.2);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 6px;
+  color: #3b82f6;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.view-details-btn:hover {
+  background: rgba(59, 130, 246, 0.3);
+}
+
+/* Rubric Criteria Expandable */
+.rubric-detail-card .criteria-list {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #1e3a5f;
+}
+
+.rubric-detail-card .criteria-list h4 {
+  color: #8fa3b8;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+
+.rubric-detail-card .criteria-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.rubric-detail-card .criteria-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: rgba(30, 58, 95, 0.2);
+  border-radius: 4px;
+  margin-bottom: 0.25rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.rubric-detail-card .criteria-list li:hover {
+  background: rgba(30, 58, 95, 0.4);
+}
+
+.rubric-detail-card .criterion-name {
+  flex: 1;
+  color: #e8eef4;
+  font-size: 0.85rem;
+}
+
+.rubric-detail-card .criterion-weight {
+  color: #e85d04;
+  font-size: 0.8rem;
+  font-weight: 600;
+}

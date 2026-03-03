@@ -99,6 +99,162 @@ function Toast({ message, type, onClose }) {
   );
 }
 
+// Job Results Modal - shows per-student breakdown
+function JobResultsModal({ job, onClose, onDownload }) {
+  const [expandedStudent, setExpandedStudent] = useState(null);
+  const assessments = job.results?.assessments || [];
+  
+  // Sort by score descending
+  const sortedAssessments = [...assessments].sort((a, b) => (b.percentage || 0) - (a.percentage || 0));
+  
+  // Calculate stats
+  const stats = assessments.length > 0 ? {
+    count: assessments.length,
+    avgScore: assessments.reduce((sum, a) => sum + (a.percentage || 0), 0) / assessments.length,
+    minScore: Math.min(...assessments.map(a => a.percentage || 0)),
+    maxScore: Math.max(...assessments.map(a => a.percentage || 0)),
+    passCount: assessments.filter(a => (a.percentage || 0) >= 50).length
+  } : null;
+
+  const getScoreColor = (percentage) => {
+    if (percentage >= 75) return '#22c55e';
+    if (percentage >= 60) return '#84cc16';
+    if (percentage >= 50) return '#eab308';
+    return '#ef4444';
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose} data-testid="job-results-modal">
+      <div className="modal-content modal-large" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2><Award size={24} /> Assessment Results: {job.job_id}</h2>
+          <button className="modal-close" onClick={onClose}><X size={24} /></button>
+        </div>
+        
+        {stats && (
+          <div className="results-stats-bar">
+            <div className="stat-item">
+              <span className="stat-value">{stats.count}</span>
+              <span className="stat-label">Students</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-value" style={{ color: getScoreColor(stats.avgScore) }}>
+                {stats.avgScore.toFixed(1)}%
+              </span>
+              <span className="stat-label">Average</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-value">{stats.minScore.toFixed(0)}% - {stats.maxScore.toFixed(0)}%</span>
+              <span className="stat-label">Range</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-value">{stats.passCount}/{stats.count}</span>
+              <span className="stat-label">Pass (≥50%)</span>
+            </div>
+          </div>
+        )}
+        
+        <div className="modal-body">
+          <div className="students-list">
+            {sortedAssessments.map((assessment, index) => (
+              <div 
+                key={assessment.student_id || index}
+                className={`student-result-card ${expandedStudent === index ? 'expanded' : ''}`}
+              >
+                <div 
+                  className="student-result-header"
+                  onClick={() => setExpandedStudent(expandedStudent === index ? null : index)}
+                >
+                  <div className="student-info">
+                    <span className="student-rank">#{index + 1}</span>
+                    <span className="student-id">{assessment.student_id || 'Unknown'}</span>
+                    {assessment.group_members && (
+                      <span className="group-badge">Group ({assessment.group_members.length + 1} members)</span>
+                    )}
+                  </div>
+                  <div className="student-score" style={{ backgroundColor: getScoreColor(assessment.percentage || 0) }}>
+                    {assessment.total_score || 0} / {job.results?.total_marks || 25}
+                    <span className="score-pct">({(assessment.percentage || 0).toFixed(0)}%)</span>
+                  </div>
+                  <ChevronRight size={20} className={`expand-icon ${expandedStudent === index ? 'rotated' : ''}`} />
+                </div>
+                
+                {expandedStudent === index && (
+                  <div className="student-result-details">
+                    {/* Criteria breakdown */}
+                    {assessment.criteria_scores && (
+                      <div className="criteria-breakdown">
+                        <h4>Criteria Scores</h4>
+                        {Object.entries(assessment.criteria_scores).map(([name, data]) => (
+                          <div key={name} className="criterion-row">
+                            <span className="criterion-name">{name}</span>
+                            <span className="criterion-level">{data.level}</span>
+                            <span className="criterion-score">{data.score}</span>
+                            {data.feedback && (
+                              <p className="criterion-feedback">{data.feedback}</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {/* Strengths */}
+                    {assessment.strengths && assessment.strengths.length > 0 && (
+                      <div className="feedback-section strengths">
+                        <h4><CheckCircle size={16} /> Strengths</h4>
+                        <ul>
+                          {assessment.strengths.map((s, i) => <li key={i}>{s}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                    
+                    {/* Areas for improvement */}
+                    {assessment.areas_for_improvement && assessment.areas_for_improvement.length > 0 && (
+                      <div className="feedback-section improvements">
+                        <h4><TrendingUp size={16} /> Areas for Improvement</h4>
+                        <ul>
+                          {assessment.areas_for_improvement.map((a, i) => <li key={i}>{a}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                    
+                    {/* Overall feedback */}
+                    {assessment.overall_feedback && (
+                      <div className="overall-feedback">
+                        <h4>Overall Feedback</h4>
+                        <p>{assessment.overall_feedback}</p>
+                      </div>
+                    )}
+                    
+                    {/* Group members */}
+                    {assessment.group_members && (
+                      <div className="group-members">
+                        <h4>Group Members (same grade applied)</h4>
+                        <div className="member-ids">
+                          {assessment.group_members.map(id => (
+                            <span key={id} className="member-id">{id}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+        
+        <div className="modal-footer">
+          <button className="btn-secondary" onClick={onClose}>Close</button>
+          <button className="btn-primary" onClick={() => onDownload(job.job_id)}>
+            <Download size={18} /> Download Graded ZIP
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // File upload dropzone
 function FileDropzone({ onFileSelect, accept, label, icon: Icon }) {
   const [isDragging, setIsDragging] = useState(false);
@@ -349,7 +505,7 @@ function AssessmentDetailsModal({ assessment, onClose }) {
 }
 
 // Job status card
-function JobCard({ job, onDownload, onUploadToEfundi }) {
+function JobCard({ job, onDownload, onUploadToEfundi, onViewDetails }) {
   const [showLogs, setShowLogs] = useState(false);
   
   const statusIcons = {
@@ -376,6 +532,14 @@ function JobCard({ job, onDownload, onUploadToEfundi }) {
     failed: 'Failed'
   };
 
+  // Calculate stats from assessments
+  const stats = job.results?.assessments ? {
+    count: job.results.assessments.length,
+    avgScore: job.results.assessments.reduce((sum, a) => sum + (a.percentage || 0), 0) / job.results.assessments.length,
+    minScore: Math.min(...job.results.assessments.map(a => a.percentage || 0)),
+    maxScore: Math.max(...job.results.assessments.map(a => a.percentage || 0))
+  } : null;
+
   return (
     <div className={`job-card job-${job.status}`} data-testid={`job-${job.job_id}`}>
       <div className="job-header">
@@ -394,9 +558,30 @@ function JobCard({ job, onDownload, onUploadToEfundi }) {
           </span>
         )}
         {job.results && (
-          <span className="job-count">{job.results.submissions_processed} submissions</span>
+          <span className="job-count">{job.results.submissions_processed} submissions processed</span>
+        )}
+        {stats && (
+          <div className="job-stats">
+            <span className="stat">Avg: {stats.avgScore.toFixed(0)}%</span>
+            <span className="stat">Range: {stats.minScore.toFixed(0)}%-{stats.maxScore.toFixed(0)}%</span>
+          </div>
         )}
       </div>
+      
+      {/* Progress during processing */}
+      {job.status === 'processing' && job.results?.assessments && (
+        <div className="job-progress">
+          <div className="progress-bar">
+            <div 
+              className="progress-fill" 
+              style={{ width: `${(job.results.assessments.length / (job.results.total_submissions || 15)) * 100}%` }}
+            />
+          </div>
+          <span className="progress-text">
+            {job.results.assessments.length} of {job.results.total_submissions || '?'} processed
+          </span>
+        </div>
+      )}
       
       {/* Logs toggle */}
       {job.logs && job.logs.length > 0 && (
@@ -423,12 +608,20 @@ function JobCard({ job, onDownload, onUploadToEfundi }) {
       {job.status === 'completed' && (
         <div className="job-actions">
           <button 
+            className="view-details-btn"
+            onClick={() => onViewDetails(job)}
+            data-testid={`view-details-${job.job_id}`}
+          >
+            <Eye size={16} />
+            View Results
+          </button>
+          <button 
             className="download-btn"
             onClick={() => onDownload(job.job_id)}
             data-testid={`download-${job.job_id}`}
           >
             <Download size={16} />
-            Download Results
+            Download ZIP
           </button>
           {job.assignment_url && onUploadToEfundi && (
             <button 
@@ -676,15 +869,33 @@ function App() {
     }
   };
 
-  // Download results
-  const handleDownload = (jobId) => {
-    // Create a temporary anchor element to trigger download
-    const link = document.createElement('a');
-    link.href = `${API_URL}/api/download/${jobId}`;
-    link.download = `efundi_graded_${jobId}.zip`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  // Download results - using fetch + blob for reliability
+  const handleDownload = async (jobId) => {
+    try {
+      showToast('Starting download...', 'info');
+      const response = await fetch(`${API_URL}/api/download/${jobId}`);
+      if (!response.ok) throw new Error('Download failed');
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `efundi_graded_${jobId}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      showToast('Download complete!', 'success');
+    } catch (error) {
+      showToast(`Download failed: ${error.message}`, 'error');
+    }
+  };
+
+  // View job results with per-student breakdown
+  const [selectedJob, setSelectedJob] = useState(null);
+  
+  const handleViewJobDetails = (job) => {
+    setSelectedJob(job);
   };
 
   // View assessment details
@@ -1022,6 +1233,7 @@ function App() {
                       job={job}
                       onDownload={handleDownload}
                       onUploadToEfundi={handleUploadToEfundi}
+                      onViewDetails={handleViewJobDetails}
                     />
                   ))}
                 </div>
@@ -1046,6 +1258,15 @@ function App() {
         <AssessmentDetailsModal
           assessment={selectedAssessment}
           onClose={() => setSelectedAssessment(null)}
+        />
+      )}
+
+      {/* Job Results Modal - per-student breakdown */}
+      {selectedJob && (
+        <JobResultsModal
+          job={selectedJob}
+          onClose={() => setSelectedJob(null)}
+          onDownload={handleDownload}
         />
       )}
     </div>

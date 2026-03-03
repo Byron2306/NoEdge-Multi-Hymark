@@ -48,6 +48,23 @@ Frontend (React)         Backend (FastAPI)          Database (MongoDB)
 - [x] **Same filename for annotated docs** - FIXED: Annotated DOCX keeps original filename
 - [x] Annotated document download
 - [x] Job status tracking for bulk assessments
+- [x] **Group member detection** - Extracts student IDs from first page and applies same grade
+- [x] **Score validation** - Recalculates total from criteria scores to fix AI math errors
+- [x] **Balanced grading prompt** - ~65% average with meaningful variation (36%-80% range)
+
+### Frontend Features
+- [x] Three-tab interface (Assess, Rubrics, Jobs)
+- [x] File upload dropzones
+- [x] Rubric selection cards
+- [x] Bulk eFundi ZIP assessment
+- [x] Single file assessment
+- [x] Toast notifications
+- [x] **Download ZIP button** - FIXED: Using fetch+blob for reliable downloads
+- [x] **Job Results Modal** - Per-student breakdown with scores, criteria, feedback
+- [x] **Expandable student details** - Click to see strengths, improvements, overall feedback
+- [x] **Group member badges** - Shows group submissions with member count
+- [x] **Stats dashboard** - Shows average, range, pass rate for each job
+- [x] **Rubric criteria viewer** - Shows all criteria with mark allocations
 
 ### Frontend Features
 - [x] Modern dark-themed UI with responsive design
