@@ -209,7 +209,12 @@ function AssessmentDetailsModal({ assessment, onClose }) {
 
   const handleDownload = () => {
     if (assessment._id) {
-      window.open(`${API_URL}/api/assessment/${assessment._id}/download`, '_blank');
+      const link = document.createElement('a');
+      link.href = `${API_URL}/api/assessment/${assessment._id}/download`;
+      link.download = `${assessment.submission_file || 'assessment'}_graded.docx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
   };
 
@@ -644,7 +649,13 @@ function App() {
 
   // Download results
   const handleDownload = (jobId) => {
-    window.open(`${API_URL}/api/download/${jobId}`, '_blank');
+    // Create a temporary anchor element to trigger download
+    const link = document.createElement('a');
+    link.href = `${API_URL}/api/download/${jobId}`;
+    link.download = `efundi_graded_${jobId}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // View assessment details
