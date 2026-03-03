@@ -855,14 +855,29 @@ async def upload_rubric(
 ):
     """Upload and parse a rubric file (DOCX or PDF)."""
     
+    # Validate file type
+    allowed_extensions = {'.docx', '.pdf', '.doc', '.txt'}
+    file_ext = Path(file.filename).suffix.lower()
+    if file_ext not in allowed_extensions:
+        raise HTTPException(status_code=400, detail=f"Invalid file type. Allowed: {', '.join(allowed_extensions)}")
+    
     # Save file
     file_path = RUBRICS_DIR / file.filename
-    with open(file_path, 'wb') as f:
-        content = await file.read()
-        f.write(content)
+    try:
+        with open(file_path, 'wb') as f:
+            content = await file.read()
+            f.write(content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
     
     # Parse rubric
-    rubric_data = parse_essay_matrix_from_docx(file_path)
+    try:
+        rubric_data = parse_essay_matrix_from_docx(file_path)
+    except Exception as e:
+        # Clean up failed file
+        file_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Failed to parse rubric file: {str(e)}. Please ensure it's a valid document.")
+    
     rubric_data["name"] = name or file.filename
     rubric_data["file_path"] = str(file_path)
     rubric_data["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -1064,11 +1079,26 @@ async def list_rubrics():
 @app.get("/api/rubric/{rubric_id}")
 async def get_rubric(rubric_id: str):
     """Get a specific rubric by ID."""
-    rubric = rubrics_collection.find_one({"_id": ObjectId(rubric_id)})
+    try:
+        rubric = rubrics_collection.find_one({"_id": ObjectId(rubric_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid rubric ID format")
     if not rubric:
         raise HTTPException(status_code=404, detail="Rubric not found")
     rubric["_id"] = str(rubric["_id"])
     return rubric
+
+
+@app.delete("/api/rubric/{rubric_id}")
+async def delete_rubric(rubric_id: str):
+    """Delete a rubric by ID."""
+    try:
+        result = rubrics_collection.delete_one({"_id": ObjectId(rubric_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid rubric ID format")
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Rubric not found")
+    return {"success": True, "message": "Rubric deleted"}
 
 
 @app.post("/api/assess/single")
@@ -1247,11 +1277,36 @@ async def list_assessments():
 @app.get("/api/assessment/{assessment_id}")
 async def get_assessment(assessment_id: str):
     """Get a specific assessment."""
-    assessment = assessments_collection.find_one({"_id": ObjectId(assessment_id)})
+    try:
+        assessment = assessments_collection.find_one({"_id": ObjectId(assessment_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid assessment ID format")
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
     assessment["_id"] = str(assessment["_id"])
     return assessment
+
+
+@app.get("/api/assessment/{assessment_id}/download")
+async def download_annotated_document(assessment_id: str):
+    """Download the annotated document for an assessment."""
+    try:
+        assessment = assessments_collection.find_one({"_id": ObjectId(assessment_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid assessment ID format")
+    
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    
+    annotated_file = assessment.get("annotated_file")
+    if not annotated_file or not Path(annotated_file).exists():
+        raise HTTPException(status_code=404, detail="Annotated document not found")
+    
+    return FileResponse(
+        annotated_file,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=Path(annotated_file).name
+    )
 
 
 # Webhook endpoint for eFundi

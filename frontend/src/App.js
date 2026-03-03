@@ -203,6 +203,12 @@ function AssessmentResultCard({ assessment, onViewDetails }) {
 function AssessmentDetailsModal({ assessment, onClose }) {
   if (!assessment) return null;
 
+  const handleDownload = () => {
+    if (assessment._id) {
+      window.open(`${API_URL}/api/assessment/${assessment._id}/download`, '_blank');
+    }
+  };
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={e => e.stopPropagation()} data-testid="assessment-details-modal">
@@ -227,6 +233,17 @@ function AssessmentDetailsModal({ assessment, onClose }) {
             {assessment.percentage?.toFixed(1)}%
           </div>
         </div>
+
+        {assessment.annotated_file && (
+          <button 
+            className="download-annotated-btn"
+            onClick={handleDownload}
+            data-testid="download-annotated"
+          >
+            <Download size={18} />
+            Download Annotated Document
+          </button>
+        )}
 
         <div className="modal-section">
           <h3>Overall Feedback</h3>
@@ -401,6 +418,24 @@ function App() {
       loadRubrics();
     } catch (error) {
       showToast(`Failed to upload rubric: ${error.message}`, 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Create default essay rubric
+  const handleCreateDefaultRubric = async () => {
+    setIsLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('name', 'Essay Assessment Rubric (50 marks)');
+      formData.append('total_marks', '50');
+      
+      const result = await api.post('/api/rubric/essay-default', formData, true);
+      showToast(`Default rubric "${result.rubric.name}" created!`, 'success');
+      loadRubrics();
+    } catch (error) {
+      showToast(`Failed to create rubric: ${error.message}`, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -609,12 +644,23 @@ function App() {
                 <Upload size={22} />
                 Upload New Rubric
               </h2>
-              <FileDropzone
-                onFileSelect={handleRubricUpload}
-                accept=".docx,.pdf,.doc"
-                label="Upload Rubric (DOCX/PDF)"
-                icon={BookOpen}
-              />
+              <div className="rubric-upload-options">
+                <FileDropzone
+                  onFileSelect={handleRubricUpload}
+                  accept=".docx,.pdf,.doc"
+                  label="Upload Rubric (DOCX/PDF)"
+                  icon={BookOpen}
+                />
+                <div className="or-divider">OR</div>
+                <button 
+                  className="create-default-btn"
+                  onClick={handleCreateDefaultRubric}
+                  data-testid="create-default-rubric"
+                >
+                  <Zap size={18} />
+                  Create Default Essay Rubric (50 marks)
+                </button>
+              </div>
             </section>
 
             <section className="section">
