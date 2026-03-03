@@ -477,7 +477,10 @@ def annotate_docx_with_feedback(
     original_path: Path,
     output_path: Path,
     annotations: List[Dict[str, Any]],
-    overall_feedback: str
+    overall_feedback: str,
+    criteria_scores: Dict[str, Any] = None,
+    total_score: float = 0,
+    total_possible: float = 100
 ) -> bool:
     """Add red-text annotations to a DOCX document."""
     if not DOCX_AVAILABLE:
@@ -486,76 +489,131 @@ def annotate_docx_with_feedback(
     try:
         doc = Document(str(original_path))
         
-        # Add feedback header at the beginning
-        feedback_para = doc.paragraphs[0].insert_paragraph_before("")
-        feedback_run = feedback_para.add_run("=== ASSESSMENT FEEDBACK ===\n\n")
-        feedback_run.font.color.rgb = RGBColor(255, 0, 0)
-        feedback_run.font.bold = True
-        feedback_run.font.size = Pt(12)
+        # Add feedback header at the BEGINNING of the document
+        if doc.paragraphs:
+            first_para = doc.paragraphs[0]
+            feedback_para = first_para.insert_paragraph_before("")
+        else:
+            feedback_para = doc.add_paragraph()
         
-        overall_run = feedback_para.add_run(f"{overall_feedback}\n\n")
-        overall_run.font.color.rgb = RGBColor(255, 0, 0)
-        overall_run.font.size = Pt(11)
+        # Header with score
+        percentage = (total_score / total_possible * 100) if total_possible > 0 else 0
+        header_run = feedback_para.add_run(f"{'='*60}\n")
+        header_run.font.color.rgb = RGBColor(255, 0, 0)
         
-        separator = feedback_para.add_run("=" * 50 + "\n\n")
-        separator.font.color.rgb = RGBColor(255, 0, 0)
+        score_run = feedback_para.add_run(f"ASSESSMENT FEEDBACK\n")
+        score_run.font.color.rgb = RGBColor(255, 0, 0)
+        score_run.font.bold = True
+        score_run.font.size = Pt(14)
         
-        # Track annotations added
+        score_detail = feedback_para.add_run(f"Score: {total_score}/{total_possible} ({percentage:.1f}%)\n")
+        score_detail.font.color.rgb = RGBColor(255, 0, 0)
+        score_detail.font.bold = True
+        score_detail.font.size = Pt(12)
+        
+        sep_run = feedback_para.add_run(f"{'='*60}\n\n")
+        sep_run.font.color.rgb = RGBColor(255, 0, 0)
+        
+        # Overall feedback
+        overall_header = feedback_para.add_run("OVERALL FEEDBACK:\n")
+        overall_header.font.color.rgb = RGBColor(255, 0, 0)
+        overall_header.font.bold = True
+        
+        overall_text = feedback_para.add_run(f"{overall_feedback}\n\n")
+        overall_text.font.color.rgb = RGBColor(255, 0, 0)
+        overall_text.font.size = Pt(11)
+        
+        # Criteria scores breakdown
+        if criteria_scores:
+            criteria_header = feedback_para.add_run("CRITERIA BREAKDOWN:\n")
+            criteria_header.font.color.rgb = RGBColor(255, 0, 0)
+            criteria_header.font.bold = True
+            
+            for crit_name, crit_data in criteria_scores.items():
+                crit_line = feedback_para.add_run(f"• {crit_name}: {crit_data.get('score', 0)} ({crit_data.get('level', 'N/A')})\n")
+                crit_line.font.color.rgb = RGBColor(200, 0, 0)
+                crit_line.font.size = Pt(10)
+                
+                crit_feedback = feedback_para.add_run(f"  {crit_data.get('feedback', '')}\n\n")
+                crit_feedback.font.color.rgb = RGBColor(150, 0, 0)
+                crit_feedback.font.size = Pt(9)
+                crit_feedback.font.italic = True
+        
+        end_sep = feedback_para.add_run(f"\n{'='*60}\nORIGINAL SUBMISSION BELOW\n{'='*60}\n\n")
+        end_sep.font.color.rgb = RGBColor(255, 0, 0)
+        end_sep.font.bold = True
+        
+        # Track annotations to add inline markers
         annotation_map = {}
         for i, ann in enumerate(annotations):
             quote = ann.get("quote", "")
             comment = ann.get("comment", "")
             ann_type = ann.get("type", "suggestion")
             if quote:
-                annotation_map[quote.lower().strip()[:50]] = {
+                # Use first 40 chars as key
+                key = quote.lower().strip()[:40]
+                annotation_map[key] = {
                     "number": i + 1,
                     "comment": comment,
                     "type": ann_type
                 }
         
-        # Process paragraphs and add inline annotations
-        for para in doc.paragraphs:
+        # Process paragraphs and add inline annotation markers [*1], [*2], etc.
+        for para in doc.paragraphs[1:]:  # Skip the feedback paragraph we just added
             para_text = para.text.lower()
             for key, ann_data in annotation_map.items():
-                if key in para_text:
-                    # Add annotation after the paragraph
-                    ann_run = para.add_run(f" [*{ann_data['number']}]")
-                    ann_run.font.color.rgb = RGBColor(255, 0, 0)
-                    ann_run.font.bold = True
-                    ann_run.font.size = Pt(9)
+                if key and key in para_text:
+                    # Add annotation marker after the paragraph
+                    marker_run = para.add_run(f" [*{ann_data['number']}]")
+                    marker_run.font.color.rgb = RGBColor(255, 0, 0)
+                    marker_run.font.bold = True
+                    marker_run.font.size = Pt(9)
+                    marker_run.font.superscript = True
         
-        # Add annotation list at the end
+        # Add detailed annotations at the END of the document
         doc.add_paragraph("")
         end_para = doc.add_paragraph()
-        end_header = end_para.add_run("\n\n=== DETAILED ANNOTATIONS ===\n\n")
-        end_header.font.color.rgb = RGBColor(255, 0, 0)
-        end_header.font.bold = True
+        
+        ann_header = end_para.add_run(f"\n\n{'='*60}\nDETAILED ANNOTATIONS\n{'='*60}\n\n")
+        ann_header.font.color.rgb = RGBColor(255, 0, 0)
+        ann_header.font.bold = True
         
         for i, ann in enumerate(annotations):
             ann_para = doc.add_paragraph()
+            
+            # Annotation number
             ann_num = ann_para.add_run(f"[{i+1}] ")
             ann_num.font.color.rgb = RGBColor(255, 0, 0)
             ann_num.font.bold = True
             
+            # Type badge
             ann_type = ann.get("type", "suggestion").upper()
             type_run = ann_para.add_run(f"({ann_type}) ")
             type_run.font.color.rgb = RGBColor(180, 0, 0)
             type_run.font.italic = True
+            type_run.font.size = Pt(10)
             
+            # Comment
             comment_run = ann_para.add_run(ann.get("comment", ""))
             comment_run.font.color.rgb = RGBColor(255, 0, 0)
+            comment_run.font.size = Pt(11)
             
+            # Quote reference
             if ann.get("quote"):
-                quote_run = ann_para.add_run(f'\n   Re: "{ann["quote"][:100]}..."')
-                quote_run.font.color.rgb = RGBColor(150, 0, 0)
+                quote_text = ann["quote"][:150] + "..." if len(ann["quote"]) > 150 else ann["quote"]
+                quote_run = ann_para.add_run(f'\n   Re: "{quote_text}"')
+                quote_run.font.color.rgb = RGBColor(120, 0, 0)
                 quote_run.font.italic = True
                 quote_run.font.size = Pt(9)
         
+        # Save to output path
         doc.save(str(output_path))
         return True
         
     except Exception as e:
         print(f"[Annotation Error] {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -631,7 +689,7 @@ async def process_efundi_zip(
         with zipfile.ZipFile(zip_path, 'r') as zf:
             zf.extractall(temp_dir)
         
-        # Find root folder
+        # Find root folder (e.g., "Assignment 1 /")
         contents = list(temp_dir.iterdir())
         if len(contents) == 1 and contents[0].is_dir():
             root_dir = contents[0]
@@ -646,9 +704,9 @@ async def process_efundi_zip(
                 break
         
         # Process each student folder
-        grades_map = {}
-        feedback_files = {}
-        comments_map = {}
+        grades_map = {}  # student_id -> score
+        feedback_files = {}  # student_folder_name -> [(source_path, dest_filename)]
+        comments_map = {}  # student_id -> comment text
         
         for student_folder in root_dir.iterdir():
             if not student_folder.is_dir():
@@ -668,6 +726,7 @@ async def process_efundi_zip(
                               list(submission_dir.glob("*.doc"))
             
             if not submission_files:
+                print(f"[Skipping] No submissions for {student_id}")
                 continue
             
             # Process first valid submission
@@ -675,6 +734,7 @@ async def process_efundi_zip(
             submission_text = extract_document_content(submission_file)
             
             if not submission_text.strip():
+                print(f"[Skipping] Empty submission for {student_id}")
                 continue
             
             # Run AI assessment
@@ -691,54 +751,90 @@ async def process_efundi_zip(
             percentage = (total_score / total_possible * 100) if total_possible > 0 else 0
             assessment["percentage"] = round(percentage, 2)
             
-            # Store grade
+            # Store grade for CSV update
             grades_map[student_id] = total_score
             
-            # Create annotated feedback document
-            feedback_folder = output_dir / "feedback" / student_folder.name / "Feedback Attachment(s)"
+            # Create feedback folder for this student
+            feedback_folder = student_folder / "Feedback Attachment(s)"
             feedback_folder.mkdir(parents=True, exist_ok=True)
             
-            # Annotate the original document
+            # Create annotated copy of the ORIGINAL submission in the Feedback folder
+            feedback_files[student_folder.name] = []
+            
             if submission_file.suffix.lower() == '.docx':
-                annotated_path = feedback_folder / f"{submission_file.stem}_GRADED.docx"
-                annotate_docx_with_feedback(
-                    submission_file,
-                    annotated_path,
+                # Annotate the original DOCX and save to feedback folder
+                annotated_filename = submission_file.name  # Keep same name as original
+                annotated_path = feedback_folder / annotated_filename
+                
+                success = annotate_docx_with_feedback(
+                    submission_file,  # Source: original submission
+                    annotated_path,   # Dest: feedback folder with same name
                     assessment.get("annotations", []),
-                    assessment.get("overall_feedback", "")
+                    assessment.get("overall_feedback", ""),
+                    assessment.get("criteria_scores", {}),
+                    total_score,
+                    total_possible
                 )
-                feedback_files[student_folder.name] = [annotated_path]
+                
+                if success:
+                    feedback_files[student_folder.name].append(annotated_path)
+                    print(f"[Annotated] {annotated_path}")
             
-            # Also create text feedback
-            feedback_txt_path = feedback_folder / "feedback.txt"
-            create_feedback_txt(feedback_txt_path, assessment)
-            if student_folder.name not in feedback_files:
-                feedback_files[student_folder.name] = []
-            feedback_files[student_folder.name].append(feedback_txt_path)
+            elif submission_file.suffix.lower() == '.pdf':
+                # For PDFs, create a feedback text file since we can't annotate PDFs easily
+                feedback_txt_path = feedback_folder / f"{submission_file.stem}_FEEDBACK.txt"
+                create_feedback_txt(feedback_txt_path, assessment)
+                feedback_files[student_folder.name].append(feedback_txt_path)
             
-            # Create comments.txt
-            comments_map[student_id] = f"Score: {total_score}/{total_possible} ({percentage:.1f}%)\n\n{assessment.get('overall_feedback', '')}"
+            # Create/update comments.txt with the overall feedback
+            comments_txt = f"""Score: {total_score}/{total_possible} ({percentage:.1f}%)
+
+{assessment.get('overall_feedback', '')}
+
+STRENGTHS:
+{chr(10).join('• ' + s for s in assessment.get('strengths', []))}
+
+AREAS FOR IMPROVEMENT:
+{chr(10).join('• ' + a for a in assessment.get('areas_for_improvement', []))}
+
+CRITERIA BREAKDOWN:
+"""
+            for crit_name, crit_data in assessment.get('criteria_scores', {}).items():
+                comments_txt += f"\n{crit_name}: {crit_data.get('score', 0)} ({crit_data.get('level', 'N/A')})\n"
+                comments_txt += f"  {crit_data.get('feedback', '')}\n"
+            
+            comments_map[student_id] = comments_txt
+            
+            # Write comments.txt directly to the student folder
+            comments_path = student_folder / "comments.txt"
+            comments_path.write_text(comments_txt, encoding='utf-8')
             
             results["assessments"].append(assessment)
             results["submissions_processed"] += 1
         
-        # Update grades.csv
+        # Update grades.csv in place
         if grades_csv and grades_csv.exists():
-            updated_csv = update_grades_csv(grades_csv, grades_map)
-            output_grades = output_dir / "grades.csv"
-            output_grades.write_bytes(updated_csv)
-            results["grades_csv_path"] = str(output_grades)
+            print(f"[Updating grades.csv] {len(grades_map)} grades to update")
+            updated_csv_content = update_grades_csv_content(grades_csv, grades_map)
+            grades_csv.write_bytes(updated_csv_content)
+            results["grades_csv_path"] = str(grades_csv)
         
-        # Create output zip for eFundi upload
+        # Create output zip - repackage the entire extracted folder
         output_zip = output_dir / f"efundi_upload_{results['job_id']}.zip"
-        repackage_efundi_zip(
-            zip_path,
-            output_zip,
-            grades_map,
-            feedback_files,
-            comments_map
-        )
+        print(f"[Creating ZIP] {output_zip}")
+        
+        with zipfile.ZipFile(output_zip, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
+            for file_path in root_dir.rglob('*'):
+                if file_path.is_file():
+                    arcname = str(file_path.relative_to(temp_dir))
+                    zout.write(file_path, arcname)
+                elif file_path.is_dir():
+                    # Add empty directories
+                    arcname = str(file_path.relative_to(temp_dir)) + '/'
+                    zout.writestr(arcname, '')
+        
         results["output_zip_path"] = str(output_zip)
+        print(f"[Complete] Processed {results['submissions_processed']} submissions")
         
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -746,7 +842,7 @@ async def process_efundi_zip(
     return results
 
 
-def update_grades_csv(csv_path: Path, grades_map: Dict[str, Any]) -> bytes:
+def update_grades_csv_content(csv_path: Path, grades_map: Dict[str, Any]) -> bytes:
     """Update grades.csv with assessment scores."""
     csv_bytes = csv_path.read_bytes()
     text = csv_bytes.decode("utf-8-sig", errors="replace")
@@ -755,20 +851,35 @@ def update_grades_csv(csv_path: Path, grades_map: Dict[str, Any]) -> bytes:
     if len(lines) < 3:
         return csv_bytes
     
+    # eFundi CSV format:
+    # Line 1: "Assignment Name","SCORE_GRADE_TYPE"
+    # Line 2: (empty)
+    # Line 3: Header row with columns
+    # Line 4+: Data rows
+    
     prefix = lines[:2]
     header = lines[2]
     data_lines = lines[3:]
     
+    # Parse header to find column indices
     reader = csv.DictReader([header] + data_lines)
+    fieldnames = reader.fieldnames
+    
     out = io.StringIO()
-    writer = csv.DictWriter(out, fieldnames=reader.fieldnames, lineterminator="\r\n")
+    writer = csv.DictWriter(out, fieldnames=fieldnames, lineterminator="\r\n")
     writer.writeheader()
     
+    updated_count = 0
     for row in reader:
+        # Try both "ID" and "Display ID" columns
         sid = (row.get("ID") or row.get("Display ID") or "").strip()
         if sid in grades_map:
             row["grade"] = str(grades_map[sid])
+            updated_count += 1
+            print(f"[Grade] {sid}: {grades_map[sid]}")
         writer.writerow(row)
+    
+    print(f"[Grades CSV] Updated {updated_count} grades")
     
     updated = "\r\n".join(prefix) + "\r\n" + out.getvalue().rstrip("\r\n") + "\r\n"
     return updated.encode("utf-8-sig")

@@ -43,7 +43,9 @@ Frontend (React)         Backend (FastAPI)          Database (MongoDB)
 - [x] Single submission assessment with AI feedback
 - [x] Bulk ZIP assessment for eFundi
 - [x] Document annotation with red text
-- [x] CSV grade file updates
+- [x] **CSV grade file updates** - FIXED: Now correctly updates `grade` column
+- [x] **Annotated document in correct folder** - FIXED: Feedback placed in `Feedback Attachment(s)/` folder
+- [x] **Same filename for annotated docs** - FIXED: Annotated DOCX keeps original filename
 - [x] Annotated document download
 - [x] Job status tracking for bulk assessments
 
@@ -85,6 +87,7 @@ Frontend (React)         Backend (FastAPI)          Database (MongoDB)
 - [x] Core AI assessment functionality
 - [x] Rubric parsing and management
 - [x] Document annotation
+- [x] **FIXED: eFundi bulk processing output format** - Grades in CSV, feedback in correct folders, same filenames
 
 ### P1 (High Priority)
 - [ ] PDF annotation support (currently only DOCX)

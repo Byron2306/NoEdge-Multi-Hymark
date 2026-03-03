@@ -1,0 +1,183 @@
+<analysis>**original_problem_statement:**
+The user wants to fix an assessor app to be an AI-powered, flexible tool for marking various assignment types.
+
+**PRODUCT REQUIREMENTS:**
+-   **AI-Powered Marking:** Use AI to grade assignments against flexible rubrics (e.g., argumentative essays, essay matrices).
+-   **eFundi Integration:**
+    -   Connect to eFundi via webhook (partially exists).
+    -   Automate the download of bulk assignment ZIP files from a specific eFundi assignment page.
+    -   Automate the upload of graded assignments back to eFundi.
+-   **Document Processing:**
+    -   Extract and parse student submissions from the downloaded ZIP (PDF or Word, including images).
+    -   Score each assignment accurately based on the rubric.
+    -   Annotate **quality feedback in red text directly onto the original submission document**.
+-   **Output Generation:**
+    -   Save the annotated document in the correct student-specific  folder within the original ZIP structure.
+    -   Record the final mark in the  file.
+-   **Later Clarifications:**
+    -   The user wants full automation for the eFundi download process, only requiring them to provide credentials.
+    -   The specific navigation flow is: Go to the Assignments tab -> Find the correct assignment in the list -> Click the Grade link in that assignment's row -> Click the Download All button on the subsequent page.
+    -   User feedback on a previous version: the  was not being updated, annotations were on a new file instead of the original, and the annotated file was not placed in the correct  folder.
+
+**User's preferred language**: English
+
+**what currently exists?**
+A full-stack application (React + FastAPI) was built from scratch to replace the user's initial codebase. The app supports rubric creation, AI-powered assessment of single DOCX files, and bulk assessment via a manual upload of an eFundi ZIP file. An attempt to automate the eFundi download using Playwright was made but is currently broken due to the complexity of the eFundi website's navigation. The agent was in the middle of refactoring the backend to fix the output of the bulk assessment based on user feedback.
+
+**Last working item**:
+-   **Last item agent was working:** Fixing the eFundi bulk assessment output. The user reported that grades were not saved to the CSV, annotations were not on the original document, and feedback files were in the wrong folder. The agent started refactoring  to correct the file handling and data writing logic, and was in the process of cleaning up old, duplicated functions.
+-   **Status:** IN PROGRESS
+-   **Agent Testing Done:** N
+-   **Which testing method agent to use?** Manual testing. The agent needs to test the bulk assessment endpoint () by uploading the ZIP file located at . After processing, the agent must inspect the output ZIP to verify that the grades are in , the annotated document is in the correct  folder, and the annotations are on a copy of the original document.
+-   **User Testing Done:** N
+
+**All Pending/In progress Issue list**:
+-   **Issue 1 (P0):** Fix eFundi bulk processing output format.
+-   **Issue 2 (P1):** eFundi automation for downloading assignments is broken.
+
+**Issues Detail:**
+-   **Issue 1:** Fix eFundi bulk processing output format.
+    -   **Attempted fixes:** The agent started a major refactor of the  function and related helpers in . This involved creating new async functions and modifying the logic for file I/O and CSV writing. The work was interrupted mid-cleanup of old code.
+    -   **Next debug checklist:**
+        1.  Review the latest changes in  to ensure the refactoring is complete and logical.
+        2.  Ensure the new function  correctly finds students, updates the 'grade' column in , and saves the annotated file to the correct  folder.
+        3.  Confirm that all calls to the old processing functions have been updated to  the new async versions.
+        4.  Trigger a bulk assessment using the test ZIP file and verify the output corrects all three issues reported by the user.
+    -   **Why fix this issue and what will be achieved with the fix?** This is a core requirement. Fixing it will make the primary feature of the app (bulk assessment) functional and produce the correct output for the user.
+    -   **Status:** IN PROGRESS
+    -   **Is recurring issue?** N
+    -   **Should Test frontend/backend/both after fix?** Backend
+    -   **Blocked on other issue:** None
+
+-   **Issue 2:** eFundi automation for downloading assignments is broken.
+    -   **Attempted fixes:** Multiple attempts were made to fix the Playwright script in  by refining CSS selectors and navigation logic. These attempts failed due to strict mode violations, incorrect page navigation (ending up in Gradebook), and an inability to locate buttons. The agent eventually abandoned this approach and recommended manual uploads.
+    -   **Next debug checklist:**
+        1.  Re-examine the Playwright script in .
+        2.  The strict mode violation on the Grade link indicates multiple elements match the selector. The script should be modified to first uniquely identify the assignment's table row (e.g., ) and then scope the search for the Grade link within that row.
+        3.  The correct Grade link was identified as having  in its  attribute. This should be the primary selector.
+        4.  Add more robust waits and log the full page content () on failure to aid debugging.
+    -   **Why fix this issue and what will be achieved with the fix?** The user explicitly requested full automation. Fixing this would deliver a key part of their desired workflow.
+    -   **Status:** BLOCKED
+    -   **Is recurring issue?** Y
+    -   **Should Test frontend/backend/both after fix?** Backend
+    -   **Blocked on other issue:** None
+
+**In progress Task List**:
+-   **Task 1:** Complete the refactoring of the eFundi bulk processing logic.
+    -   **Where to resume:** In , validate the new async processing functions and test the complete manual bulk assessment workflow.
+    -   **What will be achieved with this?** The app will correctly process a manually uploaded eFundi ZIP and generate an output ZIP with accurate grades and properly placed annotated feedback files.
+    -   **Status:** IN PROGRESS
+    -   **Should Test frontend/backend/both after fix?** Backend
+    -   **Blocked on something:** None
+
+**Upcoming and Future Tasks**
+-   **Upcoming Tasks:**
+    -   (P1) Add support for parsing **PDF** documents, as the current implementation only supports DOCX. This involves integrating a PDF library and updating the file processing logic in .
+    -   (P2) Implement the **Upload to eFundi** feature. The UI button exists, but the backend endpoint is a placeholder.
+-   **Future Tasks:**
+    -   (P2) Add support for **parsing images** within documents and performing OCR to extract text for assessment.
+    -   (P2) Enhance the rubric parser to handle visual layouts like the essay matrix the user initially provided.
+    -   (P2) Implement persistence for rubrics and jobs, as they are currently stored in-memory and lost on restart.
+
+**Completed work in this session**
+-   A full-stack assessor application (React/FastAPI) was built from the ground up.
+-   **Features Implemented:**
+    -   Rubric Management (create/view from JSON).
+    -   AI-powered assessment for single DOCX files.
+    -   Bulk assessment via manual eFundi ZIP upload.
+    -   UI for all features, including job status tracking and logs.
+-   **Recently completed:**
+    -   Successfully processed a real batch of 15 submissions via manual upload (though the output format was incorrect).
+    -   Created UI/backend stubs for the eFundi automation workflow.
+
+**Earlier issues found/mentioned but not fixed**
+-   **Issue 1: No persistence for data.**
+    -   **Debug checklist:** The application uses in-memory Python dictionaries to store rubrics and jobs, which are lost when the application restarts.
+        1.  Choose a simple persistence method (e.g., SQLite, or writing/reading JSON files to/from disk).
+        2.  Refactor  to load data from the chosen persistence layer on startup.
+        3.  Modify all endpoints that create or update rubrics/jobs to write the changes back to the persistence layer.
+    -   **Why to solve this issue and what will be achieved with this?** To prevent data loss and make the application usable across sessions.
+    -   **Should Test frontend/backend/both after fix:** Backend
+    -   **Is recurring issue?** N
+
+**Known issue recurrence from previous fork**
+-   None.
+
+**Code Architecture**
+
+
+**Key Technical Concepts**
+-   **Backend:** FastAPI
+-   **Frontend:** React.js
+-   **AI Assessment:** OpenAI GPT-4o
+-   **Web Automation:** Playwright
+-   **File Handling:** , , 
+
+**key DB schema**
+-   No database is used. All data is stored in in-memory Python dictionaries.
+
+**changes in tech stack**
+-   The user's original codebase (details unknown, mentioned PyBryt) was discarded and replaced with a new React/FastAPI stack.
+
+**All files of reference**
+-   : Contains the entire backend logic. **This is the main file to work on.**
+-   : Contains the entire frontend application logic.
+-   : A test eFundi ZIP file essential for debugging the bulk processing feature.
+
+**Areas that need refactoring**:
+-   **Backend Monolith:** The entire backend logic resides in . It should be split into modules for API routes, services, and utilities.
+-   **Frontend Monolith:** Almost all state and logic are in . This should be broken down using React Context or a state management library.
+-   **Lack of Persistence:** The application is stateless and loses all data on restart. It needs a database or file-based persistence layer.
+
+**key api endpoints**
+-   : Kicks off the bulk assessment from a manually uploaded ZIP. **(Needs fix)**
+-   : Triggers the automated eFundi download. **(Broken)**
+-   : Creates a new rubric.
+-   : Retrieves the status of all assessment jobs.
+-   : Downloads the processed ZIP for a bulk job.
+
+**Critical Info for New Agent**
+1.  **Priority #1 is to fix the manual bulk processing output.** The user is blocked until the app can correctly generate the graded ZIP file. Use the file at  for testing this.
+2.  **The eFundi automation is a high-priority feature but is very brittle and currently broken.** Do not spend too much time on it before fixing the manual workflow. If you attempt to fix it, be prepared for complex Playwright debugging.
+3.  **The application has no database.** All rubrics and job histories are stored in-memory and will be lost on restart. This is a major architectural flaw that should be addressed.
+4.  The user's OpenAI key was provided earlier but may need to be requested again if it's not in the environment.
+
+**documents and test reports created in this job**
+-   
+-   
+
+**Last 10 User Messages and any pending HUMAN messages**
+1.  **User (Msg 302):** The download worked, but the grades aren't in the CSV, annotations should be on the original document, and feedback files are in the wrong student folder. (**PENDING - HIGHEST PRIORITY**)
+2.  **User (Msg 246):** look its the same error. just try it from your side until it works - Regarding the failing eFundi automation. (Addressed by pivoting to manual flow)
+3.  **User (Msg 232):** Provided logs of Playwright strict mode violation. (Fix was attempted but failed)
+4.  **User (Msg 226):** Provided a screenshot and corrected the agent on the eFundi navigation flow. (Fix was attempted)
+5.  **User (Msg 194):** Reported the first Playwright error: Could not find Download All. (Fix was attempted)
+6.  **User (Msg 166):** Reported a Playwright timeout and clarified the navigation steps. (Fix was attempted)
+7.  **User (Msg 138):** Well Id want the app to automate this, I just provide authentication. (Work started, but is now blocked/broken)
+8.  **User (Msg 121):** Provided details for a new assignment type and the eFundi link. (Addressed)
+9.  **User (Msg 4):** Provided OpenAI key and rubric document. (Addressed)
+10. **User (Msg 1):** The initial problem statement. (In Progress)
+
+**Project Health Check:**
+-   **Broken:**
+    -   The primary eFundi automation feature is non-functional.
+    -   The core bulk-assessment workflow produces incorrect output, making it unusable.
+-   **Mocked:** None.
+
+**3rd Party Integrations**
+-   **OpenAI GPT-4o:** Powers the AI assessment. Requires a user-provided API key.
+
+**Testing status**
+-   **Testing agent used after significant changes:** YES, once early in development.
+-   **Troubleshoot agent used after agent stuck in loop:** NO
+-   **Test files created:** None
+-   **Known regressions:** The bulk processing output, once thought to be working, is incorrect according to recent user feedback.
+
+**Credentials to test flow:**
+-   An OpenAI API key is required for assessment. You may need to ask the user for it if it's not already in the environment.
+-   eFundi credentials are not needed for the immediate task of fixing the manual upload workflow.
+
+**What agent forgot to execute**
+-   **PDF/Image Parsing:** This was part of the original request but was deferred in favor of DOCX-only support.
+-   **Data Persistence:** The agent built the application without any database or persistent storage, a critical oversight that makes the app lose all data on restart.
+-   **Upload to eFundi:** The agent implemented the download/assessment part of the workflow but never built the functionality to upload the results back to eFundi.</analysis>
