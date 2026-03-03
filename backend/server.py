@@ -25,6 +25,13 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from bson import ObjectId
 
+# Playwright for eFundi automation
+try:
+    from playwright.async_api import async_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
+
 load_dotenv()
 
 # OpenAI client
@@ -1352,6 +1359,308 @@ async def efundi_webhook(
     
     # Same as bulk assess
     return await assess_bulk_zip(background_tasks, file, rubric_id)
+
+
+# ===================== EFUNDI AUTOMATION =====================
+
+# Store eFundi sessions
+efundi_sessions = db["efundi_sessions"]
+
+class EfundiCredentials(BaseModel):
+    username: str
+    password: str
+
+
+class EfundiDownloadRequest(BaseModel):
+    assignment_url: str
+    rubric_id: str
+
+
+@app.post("/api/efundi/authenticate")
+async def efundi_authenticate(credentials: EfundiCredentials):
+    """Authenticate with eFundi and save session."""
+    if not PLAYWRIGHT_AVAILABLE:
+        raise HTTPException(status_code=500, detail="Playwright not available for browser automation")
+    
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context()
+            page = await context.new_page()
+            
+            # Go to eFundi login
+            await page.goto("https://efundi.nwu.ac.za/portal", wait_until="domcontentloaded")
+            await page.wait_for_timeout(2000)
+            
+            # Click login if needed
+            login_link = page.locator("a:has-text('Login')")
+            if await login_link.count() > 0:
+                await login_link.first.click()
+                await page.wait_for_timeout(2000)
+            
+            # Fill credentials - eFundi uses CAS/institutional login
+            # Try to find username field
+            username_field = page.locator("input[name='username'], input[id='username'], input[type='text']").first
+            password_field = page.locator("input[name='password'], input[id='password'], input[type='password']").first
+            
+            await username_field.fill(credentials.username)
+            await password_field.fill(credentials.password)
+            
+            # Submit
+            submit_btn = page.locator("button[type='submit'], input[type='submit'], button:has-text('Login'), button:has-text('Sign')").first
+            await submit_btn.click()
+            await page.wait_for_timeout(5000)
+            
+            # Check if login was successful by looking for user menu or dashboard elements
+            if "portal" in page.url and "login" not in page.url.lower():
+                # Save session state
+                storage_state = await context.storage_state()
+                
+                # Store in database (encrypted in production)
+                efundi_sessions.update_one(
+                    {"username": credentials.username},
+                    {"$set": {
+                        "username": credentials.username,
+                        "storage_state": storage_state,
+                        "authenticated_at": datetime.now(timezone.utc).isoformat()
+                    }},
+                    upsert=True
+                )
+                
+                await browser.close()
+                return {"success": True, "message": "Successfully authenticated with eFundi"}
+            else:
+                await browser.close()
+                raise HTTPException(status_code=401, detail="Authentication failed. Please check your credentials.")
+                
+    except Exception as e:
+        print(f"[eFundi Auth Error] {e}")
+        raise HTTPException(status_code=500, detail=f"Authentication error: {str(e)}")
+
+
+@app.get("/api/efundi/status")
+async def efundi_status():
+    """Check if we have a valid eFundi session."""
+    session = efundi_sessions.find_one({}, sort=[("authenticated_at", -1)])
+    if session:
+        return {
+            "authenticated": True,
+            "username": session.get("username"),
+            "authenticated_at": session.get("authenticated_at")
+        }
+    return {"authenticated": False}
+
+
+@app.post("/api/efundi/download-and-assess")
+async def efundi_download_and_assess(
+    background_tasks: BackgroundTasks,
+    request: EfundiDownloadRequest
+):
+    """Download assignment ZIP from eFundi and start assessment."""
+    if not PLAYWRIGHT_AVAILABLE:
+        raise HTTPException(status_code=500, detail="Playwright not available")
+    
+    # Get saved session
+    session = efundi_sessions.find_one({}, sort=[("authenticated_at", -1)])
+    if not session:
+        raise HTTPException(status_code=401, detail="Not authenticated with eFundi. Please authenticate first.")
+    
+    # Verify rubric exists
+    try:
+        rubric = rubrics_collection.find_one({"_id": ObjectId(request.rubric_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid rubric ID")
+    if not rubric:
+        raise HTTPException(status_code=404, detail="Rubric not found")
+    
+    # Create job
+    job_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    job = {
+        "job_id": job_id,
+        "status": "downloading",
+        "rubric_id": str(rubric["_id"]),
+        "rubric_name": rubric["name"],
+        "assignment_url": request.assignment_url,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "progress": 0,
+        "total": 0,
+        "results": None
+    }
+    jobs_collection.insert_one(job)
+    
+    # Process in background
+    async def download_and_process():
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context(storage_state=session["storage_state"])
+                page = await context.new_page()
+                
+                # Navigate to assignment URL
+                await page.goto(request.assignment_url, wait_until="domcontentloaded")
+                await page.wait_for_timeout(3000)
+                
+                jobs_collection.update_one(
+                    {"job_id": job_id},
+                    {"$set": {"status": "navigating"}}
+                )
+                
+                # Click Download All link
+                download_all = page.locator("a:has-text('Download All'), a.itemAction:has-text('Download')")
+                if await download_all.count() > 0:
+                    await download_all.first.click()
+                    await page.wait_for_timeout(2000)
+                
+                # Select options
+                all_checkbox = page.locator("input[type='checkbox']#selectall, input[value='all']")
+                if await all_checkbox.count() > 0:
+                    await all_checkbox.first.check()
+                
+                csv_radio = page.locator("input[type='radio'][value='csv'], input:has-text('CSV')")
+                if await csv_radio.count() > 0:
+                    await csv_radio.first.check()
+                
+                # Include non-submitters
+                non_submit = page.locator("input[type='checkbox']:has-text('not yet submitted'), input#withoutSubmission")
+                if await non_submit.count() > 0:
+                    await non_submit.first.check()
+                
+                jobs_collection.update_one(
+                    {"job_id": job_id},
+                    {"$set": {"status": "downloading_zip"}}
+                )
+                
+                # Download
+                download_btn = page.locator("button:has-text('Download'), input[type='submit'][value='Download']")
+                
+                zip_path = UPLOAD_DIR / f"efundi_{job_id}.zip"
+                
+                async with page.expect_download() as download_info:
+                    await download_btn.first.click()
+                download = await download_info.value
+                await download.save_as(str(zip_path))
+                
+                await browser.close()
+                
+                jobs_collection.update_one(
+                    {"job_id": job_id},
+                    {"$set": {"status": "processing", "zip_file": str(zip_path)}}
+                )
+                
+                # Now process the downloaded ZIP
+                output_dir = OUTPUT_DIR / job_id
+                output_dir.mkdir(parents=True, exist_ok=True)
+                
+                results = process_efundi_zip(zip_path, rubric, output_dir)
+                
+                jobs_collection.update_one(
+                    {"job_id": job_id},
+                    {"$set": {
+                        "status": "completed",
+                        "results": results,
+                        "completed_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+                
+        except Exception as e:
+            print(f"[eFundi Download Error] {e}")
+            jobs_collection.update_one(
+                {"job_id": job_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": str(e),
+                    "completed_at": datetime.now(timezone.utc).isoformat()
+                }}
+            )
+    
+    background_tasks.add_task(download_and_process)
+    
+    return {
+        "success": True,
+        "job_id": job_id,
+        "message": "Download and assessment started. Check /api/job/{job_id} for status."
+    }
+
+
+@app.post("/api/efundi/upload-results/{job_id}")
+async def efundi_upload_results(job_id: str, background_tasks: BackgroundTasks):
+    """Upload graded results back to eFundi."""
+    if not PLAYWRIGHT_AVAILABLE:
+        raise HTTPException(status_code=500, detail="Playwright not available")
+    
+    # Get job
+    job = jobs_collection.find_one({"job_id": job_id})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if job.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Job not completed yet")
+    
+    results = job.get("results", {})
+    output_zip = results.get("output_zip_path")
+    
+    if not output_zip or not Path(output_zip).exists():
+        raise HTTPException(status_code=404, detail="Output ZIP not found")
+    
+    # Get session
+    session = efundi_sessions.find_one({}, sort=[("authenticated_at", -1)])
+    if not session:
+        raise HTTPException(status_code=401, detail="Not authenticated with eFundi")
+    
+    assignment_url = job.get("assignment_url")
+    if not assignment_url:
+        raise HTTPException(status_code=400, detail="Assignment URL not found in job")
+    
+    async def upload_to_efundi():
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context(storage_state=session["storage_state"])
+                page = await context.new_page()
+                
+                await page.goto(assignment_url, wait_until="domcontentloaded")
+                await page.wait_for_timeout(3000)
+                
+                # Click Upload All
+                upload_all = page.locator("a:has-text('Upload All')")
+                if await upload_all.count() > 0:
+                    await upload_all.first.click()
+                    await page.wait_for_timeout(2000)
+                
+                # Upload file
+                file_input = page.locator("input[type='file']").first
+                await file_input.set_input_files(output_zip)
+                
+                # Click Upload button
+                upload_btn = page.locator("button:has-text('Upload'), input[type='submit'][value='Upload']")
+                await upload_btn.first.click()
+                await page.wait_for_timeout(5000)
+                
+                await browser.close()
+                
+                jobs_collection.update_one(
+                    {"job_id": job_id},
+                    {"$set": {
+                        "upload_status": "completed",
+                        "uploaded_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+                
+        except Exception as e:
+            jobs_collection.update_one(
+                {"job_id": job_id},
+                {"$set": {
+                    "upload_status": "failed",
+                    "upload_error": str(e)
+                }}
+            )
+    
+    background_tasks.add_task(upload_to_efundi)
+    
+    return {
+        "success": True,
+        "message": "Upload started. Results will be uploaded to eFundi."
+    }
 
 
 if __name__ == "__main__":

@@ -15,7 +15,11 @@ import {
   Target,
   Award,
   TrendingUp,
-  Eye
+  Eye,
+  Link,
+  Lock,
+  Globe,
+  Play
 } from 'lucide-react';
 import './App.css';
 
@@ -311,36 +315,73 @@ function AssessmentDetailsModal({ assessment, onClose }) {
 }
 
 // Job status card
-function JobCard({ job, onDownload }) {
+function JobCard({ job, onDownload, onUploadToEfundi }) {
   const statusIcons = {
+    downloading: <RefreshCw size={18} className="spin" />,
+    navigating: <RefreshCw size={18} className="spin" />,
+    downloading_zip: <RefreshCw size={18} className="spin" />,
     processing: <RefreshCw size={18} className="spin" />,
     completed: <CheckCircle size={18} />,
     failed: <AlertCircle size={18} />
   };
 
+  const statusLabels = {
+    downloading: 'Downloading from eFundi...',
+    navigating: 'Navigating to assignment...',
+    downloading_zip: 'Downloading ZIP file...',
+    processing: 'Processing submissions...',
+    completed: 'Completed',
+    failed: 'Failed'
+  };
+
   return (
     <div className={`job-card job-${job.status}`} data-testid={`job-${job.job_id}`}>
       <div className="job-header">
-        {statusIcons[job.status]}
+        {statusIcons[job.status] || <Clock size={18} />}
         <span className="job-id">{job.job_id}</span>
-        <span className={`job-status status-${job.status}`}>{job.status}</span>
+        <span className={`job-status status-${job.status}`}>
+          {statusLabels[job.status] || job.status}
+        </span>
       </div>
       <div className="job-body">
         <span className="job-rubric">Rubric: {job.rubric_name}</span>
-        <span className="job-file">File: {job.zip_file}</span>
+        {job.zip_file && <span className="job-file">File: {job.zip_file.split('/').pop()}</span>}
+        {job.assignment_url && (
+          <span className="job-url">
+            <Link size={12} /> eFundi Assignment
+          </span>
+        )}
         {job.results && (
           <span className="job-count">{job.results.submissions_processed} submissions</span>
         )}
       </div>
       {job.status === 'completed' && (
-        <button 
-          className="download-btn"
-          onClick={() => onDownload(job.job_id)}
-          data-testid={`download-${job.job_id}`}
-        >
-          <Download size={16} />
-          Download Results
-        </button>
+        <div className="job-actions">
+          <button 
+            className="download-btn"
+            onClick={() => onDownload(job.job_id)}
+            data-testid={`download-${job.job_id}`}
+          >
+            <Download size={16} />
+            Download Results
+          </button>
+          {job.assignment_url && onUploadToEfundi && (
+            <button 
+              className="upload-efundi-btn"
+              onClick={() => onUploadToEfundi(job.job_id)}
+              data-testid={`upload-efundi-${job.job_id}`}
+            >
+              <Upload size={16} />
+              Upload to eFundi
+            </button>
+          )}
+        </div>
+      )}
+      {job.error && (
+        <div className="job-error">
+          <AlertCircle size={14} />
+          {job.error}
+        </div>
       )}
     </div>
   );
@@ -356,6 +397,12 @@ function App() {
   const [toasts, setToasts] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedAssessment, setSelectedAssessment] = useState(null);
+  
+  // eFundi state
+  const [efundiAuth, setEfundiAuth] = useState(null);
+  const [efundiUsername, setEfundiUsername] = useState('');
+  const [efundiPassword, setEfundiPassword] = useState('');
+  const [assignmentUrl, setAssignmentUrl] = useState('');
 
   // Toast helpers
   const showToast = (message, type = 'info') => {
@@ -395,15 +442,25 @@ function App() {
     }
   }, []);
 
+  const checkEfundiAuth = useCallback(async () => {
+    try {
+      const data = await api.get('/api/efundi/status');
+      setEfundiAuth(data);
+    } catch (error) {
+      console.error('Failed to check eFundi status:', error);
+    }
+  }, []);
+
   useEffect(() => {
     loadRubrics();
     loadJobs();
     loadAssessments();
+    checkEfundiAuth();
     
     // Poll jobs every 5 seconds
     const interval = setInterval(loadJobs, 5000);
     return () => clearInterval(interval);
-  }, [loadRubrics, loadJobs, loadAssessments]);
+  }, [loadRubrics, loadJobs, loadAssessments, checkEfundiAuth]);
 
   // Upload rubric
   const handleRubricUpload = async (file) => {
@@ -436,6 +493,70 @@ function App() {
       loadRubrics();
     } catch (error) {
       showToast(`Failed to create rubric: ${error.message}`, 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // eFundi authentication
+  const handleEfundiAuth = async (e) => {
+    e.preventDefault();
+    if (!efundiUsername || !efundiPassword) {
+      showToast('Please enter username and password', 'error');
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+      const result = await api.post('/api/efundi/authenticate', {
+        username: efundiUsername,
+        password: efundiPassword
+      });
+      showToast(result.message, 'success');
+      setEfundiPassword('');
+      checkEfundiAuth();
+    } catch (error) {
+      showToast(`Authentication failed: ${error.message}`, 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // eFundi automated download and assess
+  const handleEfundiAutomate = async () => {
+    if (!selectedRubric) {
+      showToast('Please select a rubric first', 'error');
+      return;
+    }
+    if (!assignmentUrl) {
+      showToast('Please enter the eFundi assignment URL', 'error');
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+      const result = await api.post('/api/efundi/download-and-assess', {
+        assignment_url: assignmentUrl,
+        rubric_id: selectedRubric._id
+      });
+      showToast(`Job started: ${result.job_id}`, 'success');
+      setActiveTab('jobs');
+      loadJobs();
+    } catch (error) {
+      showToast(`Failed: ${error.message}`, 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Upload results to eFundi
+  const handleUploadToEfundi = async (jobId) => {
+    setIsLoading(true);
+    try {
+      const result = await api.post(`/api/efundi/upload-results/${jobId}`, {});
+      showToast(result.message, 'success');
+    } catch (error) {
+      showToast(`Upload failed: ${error.message}`, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -589,10 +710,92 @@ function App() {
               )}
             </section>
 
+            {/* eFundi Automation Section */}
+            <section className="section efundi-section">
+              <h2 className="section-title">
+                <Globe size={22} />
+                eFundi Automation
+              </h2>
+              
+              <div className="efundi-container">
+                {/* Authentication Status */}
+                <div className="efundi-auth-status">
+                  {efundiAuth?.authenticated ? (
+                    <div className="auth-badge auth-success">
+                      <CheckCircle size={18} />
+                      <span>Connected as {efundiAuth.username}</span>
+                    </div>
+                  ) : (
+                    <div className="auth-badge auth-pending">
+                      <Lock size={18} />
+                      <span>Not authenticated</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Login Form */}
+                {!efundiAuth?.authenticated && (
+                  <form className="efundi-login-form" onSubmit={handleEfundiAuth}>
+                    <div className="form-row">
+                      <input
+                        type="text"
+                        placeholder="eFundi Username"
+                        value={efundiUsername}
+                        onChange={(e) => setEfundiUsername(e.target.value)}
+                        className="form-input"
+                        data-testid="efundi-username"
+                      />
+                      <input
+                        type="password"
+                        placeholder="eFundi Password"
+                        value={efundiPassword}
+                        onChange={(e) => setEfundiPassword(e.target.value)}
+                        className="form-input"
+                        data-testid="efundi-password"
+                      />
+                      <button type="submit" className="auth-btn" data-testid="efundi-login">
+                        <Lock size={16} />
+                        Authenticate
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {/* Assignment URL Input */}
+                {efundiAuth?.authenticated && (
+                  <div className="efundi-automate">
+                    <div className="url-input-row">
+                      <Link size={18} className="url-icon" />
+                      <input
+                        type="text"
+                        placeholder="Paste eFundi Assignment URL (e.g., https://efundi.nwu.ac.za/portal/site/.../tool/...)"
+                        value={assignmentUrl}
+                        onChange={(e) => setAssignmentUrl(e.target.value)}
+                        className="form-input url-input"
+                        data-testid="assignment-url"
+                      />
+                    </div>
+                    <button 
+                      className="automate-btn"
+                      onClick={handleEfundiAutomate}
+                      disabled={!selectedRubric || !assignmentUrl}
+                      data-testid="start-automation"
+                    >
+                      <Play size={18} />
+                      Download & Assess All Submissions
+                    </button>
+                    <p className="help-text">
+                      This will automatically download all submissions, grade them with AI, add feedback annotations, and prepare a ZIP for upload.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </section>
+
             <section className="section">
               <h2 className="section-title">
                 <Upload size={22} />
-                Upload Submission
+                Manual Upload
               </h2>
               <div className="upload-options">
                 <div className="upload-option">
@@ -734,6 +937,7 @@ function App() {
                       key={job.job_id}
                       job={job}
                       onDownload={handleDownload}
+                      onUploadToEfundi={handleUploadToEfundi}
                     />
                   ))}
                 </div>

@@ -950,6 +950,214 @@
   to { transform: rotate(360deg); }
 }
 
+/* eFundi Section */
+.efundi-section {
+  background: linear-gradient(135deg, rgba(232, 93, 4, 0.05) 0%, rgba(30, 58, 95, 0.1) 100%);
+  border-radius: 16px;
+  padding: 1.5rem;
+  border: 1px solid #1e3a5f;
+}
+
+.efundi-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.efundi-auth-status {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.auth-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.auth-success {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.auth-pending {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
+.efundi-login-form {
+  margin-top: 0.5rem;
+}
+
+.form-row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.form-input {
+  flex: 1;
+  min-width: 200px;
+  padding: 0.75rem 1rem;
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  background: #142238;
+  color: #e8eef4;
+  font-size: 0.95rem;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: #e85d04;
+}
+
+.form-input::placeholder {
+  color: #8fa3b8;
+}
+
+.auth-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #e85d04 0%, #ff6b1a 100%);
+  color: white;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.auth-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(232, 93, 4, 0.3);
+}
+
+.efundi-automate {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.url-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #142238;
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  padding: 0 1rem;
+}
+
+.url-icon {
+  color: #8fa3b8;
+  flex-shrink: 0;
+}
+
+.url-input {
+  flex: 1;
+  border: none !important;
+  background: transparent !important;
+  padding-left: 0 !important;
+}
+
+.automate-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem 1.5rem;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.automate-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+
+.automate-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.help-text {
+  font-size: 0.85rem;
+  color: #8fa3b8;
+  line-height: 1.5;
+}
+
+/* Job card updates */
+.job-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.job-actions .download-btn,
+.upload-efundi-btn {
+  flex: 1;
+}
+
+.upload-efundi-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  color: white;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.upload-efundi-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.job-url {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: #3b82f6;
+}
+
+.job-error {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  margin-top: 0.5rem;
+  background: rgba(239, 68, 68, 0.1);
+  border-radius: 6px;
+  color: #ef4444;
+  font-size: 0.85rem;
+}
+
+.status-downloading,
+.status-navigating,
+.status-downloading_zip {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .nav {
