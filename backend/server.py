@@ -609,7 +609,7 @@ def extract_student_id(folder_name: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def process_efundi_zip(
+async def process_efundi_zip(
     zip_path: Path,
     rubric: Dict[str, Any],
     output_dir: Path
@@ -677,13 +677,9 @@ def process_efundi_zip(
             if not submission_text.strip():
                 continue
             
-            # Run AI assessment (synchronously for now)
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            assessment = loop.run_until_complete(
-                assess_with_ai(submission_text, rubric)
-            )
-            loop.close()
+            # Run AI assessment
+            print(f"[Processing] Student {student_id}: {submission_file.name}")
+            assessment = await assess_with_ai(submission_text, rubric)
             
             assessment["student_id"] = student_id
             assessment["student_folder"] = student_folder.name
@@ -1224,7 +1220,7 @@ async def assess_bulk_zip(
             output_dir = OUTPUT_DIR / job_id
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            results = process_efundi_zip(zip_path, rubric, output_dir)
+            results = await process_efundi_zip(zip_path, rubric, output_dir)
             
             jobs_collection.update_one(
                 {"job_id": job_id},
@@ -1891,7 +1887,7 @@ async def efundi_download_and_assess(
                 output_dir = OUTPUT_DIR / job_id
                 output_dir.mkdir(parents=True, exist_ok=True)
                 
-                results = process_efundi_zip(zip_path, rubric, output_dir)
+                results = await process_efundi_zip(zip_path, rubric, output_dir)
                 update_job_log(f"Processed {results.get('submissions_processed', 0)} submissions")
                 
                 jobs_collection.update_one(
