@@ -1630,6 +1630,7 @@ async def efundi_download_and_assess(
                 # Step 3: Find the specific assignment row and click "Grade" link
                 # The assignments are in a table with columns: Assignment Title, For, Status, Open Date, Due Date, In/New, Scale, Remove?
                 # Each row has links: Edit | Duplicate | Grade
+                # IMPORTANT: There are 2 Grade links per row - we need the one with sakai_action=doGrade_assignment
                 update_job_log("Looking for assignment row to click Grade...")
                 update_status("finding_assignment")
                 
@@ -1639,55 +1640,76 @@ async def efundi_download_and_assess(
                 if assignment_name:
                     update_job_log(f"Looking for assignment: {assignment_name}")
                     
-                    # Find the table row containing this assignment name
-                    # Then find the "Grade" link within that row
-                    row_selectors = [
-                        f"tr:has-text('{assignment_name}')",
-                        f"tr:has(a:has-text('{assignment_name}'))",
-                        f"tr:has(td:has-text('{assignment_name}'))"
+                    # Look for the specific Grade link with the correct action
+                    # The Grade link has onclick containing 'doGrade_assignment'
+                    grade_link_selectors = [
+                        f"a[onclick*='doGrade_assignment']:has-text('Grade')",
+                        f"tr:has-text('{assignment_name}') a[onclick*='doGrade_assignment']",
+                        f"a[href*='doGrade_assignment'][href*='{assignment_name.replace(' ', '')}']"
                     ]
                     
-                    for row_selector in row_selectors:
+                    for selector in grade_link_selectors:
                         try:
-                            row = page.locator(row_selector).first
-                            if await row.count() > 0:
-                                update_job_log(f"Found assignment row with: {row_selector}")
-                                
-                                # Now find the Grade link within this row
-                                grade_link = row.locator("a:has-text('Grade')")
-                                if await grade_link.count() > 0:
-                                    update_job_log("Found Grade link in row, clicking...")
-                                    await grade_link.click()
-                                    await page.wait_for_timeout(4000)
-                                    grade_clicked = True
-                                    update_job_log("Clicked Grade link successfully")
-                                    break
-                                else:
-                                    update_job_log("Grade link not found in this row")
+                            loc = page.locator(selector)
+                            count = await loc.count()
+                            update_job_log(f"Selector '{selector}' found {count} elements")
+                            if count > 0:
+                                # Click the first matching one
+                                await loc.first.click()
+                                await page.wait_for_timeout(4000)
+                                grade_clicked = True
+                                update_job_log(f"Clicked Grade link with: {selector}")
+                                break
                         except Exception as e:
-                            update_job_log(f"Row selector error: {e}")
+                            update_job_log(f"Selector error: {e}")
                             continue
                 
-                # If no specific assignment or not found, try to click any Grade link
+                # If still not clicked, try a more general approach but be specific about the action
                 if not grade_clicked:
-                    update_job_log("Trying to find any Grade link...")
-                    grade_links = page.locator("a:has-text('Grade')")
+                    update_job_log("Trying to find Grade link with doGrade_assignment action...")
+                    
+                    # Get all links and find ones with the correct action
+                    grade_links = page.locator("a[onclick*='doGrade_assignment']")
                     count = await grade_links.count()
-                    update_job_log(f"Found {count} Grade links on page")
+                    update_job_log(f"Found {count} Grade links with doGrade_assignment action")
                     
                     if count > 0:
-                        # Click the first Grade link (or last one for Assignment 1 which is typically at bottom)
-                        await grade_links.first.click()
-                        await page.wait_for_timeout(4000)
-                        grade_clicked = True
-                        update_job_log("Clicked first Grade link")
+                        # If we have an assignment name, try to find the right one
+                        if assignment_name:
+                            for i in range(count):
+                                link = grade_links.nth(i)
+                                onclick = await link.get_attribute("onclick") or ""
+                                text = await link.inner_text()
+                                update_job_log(f"Grade link {i}: text='{text}'")
+                                # The assignment name might be in the onclick or nearby
+                                if assignment_name.lower().replace(' ', '') in onclick.lower().replace(' ', ''):
+                                    await link.click()
+                                    await page.wait_for_timeout(4000)
+                                    grade_clicked = True
+                                    update_job_log(f"Clicked Grade link {i} for {assignment_name}")
+                                    break
+                        
+                        # If still not clicked, click the last one (Assignment 1 is typically at the bottom)
+                        if not grade_clicked:
+                            await grade_links.last.click()
+                            await page.wait_for_timeout(4000)
+                            grade_clicked = True
+                            update_job_log("Clicked last Grade link (likely Assignment 1)")
                 
                 if not grade_clicked:
                     await page.screenshot(path=str(debug_dir / f"{job_id}_03_no_grade.png"), full_page=True)
                     raise Exception("Could not find Grade link for any assignment")
                 
                 await page.screenshot(path=str(debug_dir / f"{job_id}_03_after_grade_click.png"), full_page=True)
-                update_job_log(f"Current URL after Grade click: {page.url}")
+                current_url = page.url
+                update_job_log(f"Current URL after Grade click: {current_url}")
+                
+                # Verify we're on the submissions page, not Gradebook
+                if 'Gradebook' in await page.title() or '/tool/9f40a622' in current_url:
+                    update_job_log("WARNING: Landed on Gradebook instead of submissions page!")
+                    # Go back and try a different approach
+                    await page.go_back()
+                    await page.wait_for_timeout(2000)
                 
                 # Step 4: Now we should be on the grading/submissions page
                 # Look for "Download All" link
