@@ -188,14 +188,20 @@ async def ai_parse_rubric(text: str, file_name: str) -> Dict[str, Any]:
     
     system_prompt = """You are an expert at parsing academic rubrics. Extract the rubric structure from the provided text.
 
+IMPORTANT: Pay close attention to the MARKS/WEIGHT for each criterion. Look for:
+- Numbers in brackets like [8 marks] or (10 marks)
+- Numbers at the end of criterion names
+- Mark allocations in tables
+- The total should add up correctly
+
 You MUST respond with valid JSON in this exact format:
 {
     "name": "<rubric name>",
-    "total_marks": <number>,
+    "total_marks": <number - this MUST equal the sum of all criteria weights>,
     "criteria": [
         {
-            "name": "<criterion name>",
-            "weight": <max marks for this criterion>,
+            "name": "<criterion name - clean, without mark numbers>",
+            "weight": <max marks for this criterion - extract the ACTUAL number from the document>,
             "levels": {
                 "Excellent": {"description": "<description>", "min_score": <num>, "max_score": <num>},
                 "Good": {"description": "<description>", "min_score": <num>, "max_score": <num>},
@@ -206,23 +212,25 @@ You MUST respond with valid JSON in this exact format:
     ]
 }
 
-For essay rubrics, common criteria include:
-- Thesis Statement & Argument
-- Evidence & Historical Accuracy  
-- Analysis & Interpretation
-- Structure & Organization
-- Language, Style & Referencing
+CRITICAL: 
+- The "weight" field must be the ACTUAL maximum marks for that criterion as specified in the document.
+- Do NOT guess or make up weights - extract them from the document.
+- If you see "Introduction & Conclusion (8 marks)" the weight should be 8.
+- If you see a table with marks like "8 | 6 | 4 | 2" the weight is the highest value (8).
+- total_marks MUST equal the sum of all criteria weights."""
 
-If specific level descriptions aren't provided, create appropriate ones based on the criterion."""
-
-    user_prompt = f"""Parse this rubric document and extract all criteria with their weights and performance levels:
+    user_prompt = f"""Parse this rubric document and extract all criteria with their EXACT weights/marks as specified in the document.
 
 Filename: {file_name}
 
 Content:
 {text[:8000]}
 
-Extract all assessment criteria, their weights/marks, and create appropriate performance level descriptions."""
+IMPORTANT: 
+1. Extract the EXACT mark allocation for each criterion from the document
+2. The total_marks should equal the sum of all criterion weights
+3. Look for numbers in brackets, tables, or explicit mark allocations
+4. Do NOT invent or guess mark values - extract them from the text"""
 
     try:
         response = openai_client.chat.completions.create(
@@ -395,21 +403,24 @@ async def assess_with_ai(
     assignment_context = rubric.get("assignment_context", "")
     submission_requirements = rubric.get("submission_requirements", "")
     
-    system_prompt = """You are a STRICT and RIGOROUS academic assessor specializing in education methodology and History pedagogy. Your task is to thoroughly and critically evaluate student submissions against the provided rubric.
+    system_prompt = """You are a RIGOROUS but FAIR academic assessor specializing in education methodology and History pedagogy. Your task is to thoroughly evaluate student submissions against the provided rubric.
 
 IMPORTANT GRADING GUIDELINES:
-- Be STRICT and CRITICAL in your assessment. Do not inflate grades.
-- The average score should be around 65% (approximately 2/3 of total marks).
-- Reserve top marks (80%+) ONLY for truly exceptional work that demonstrates mastery.
-- Most submissions should fall in the 55-70% range unless they show clear excellence or deficiency.
-- Identify specific weaknesses and gaps, not just strengths.
-- Deduct marks for: vague explanations, missing components, superficial analysis, poor structure, lack of evidence.
+- Aim for a CLASS AVERAGE around 65%, but with MEANINGFUL VARIATION between submissions.
+- Use the FULL RANGE of scores:
+  * 80-100%: Exceptional work - comprehensive, insightful, well-structured, few if any weaknesses
+  * 65-79%: Good/Proficient work - solid understanding, some minor gaps or areas for improvement  
+  * 50-64%: Satisfactory/Developing work - meets basic requirements but lacks depth or has notable weaknesses
+  * Below 50%: Inadequate work - significant gaps, missing components, or fundamental misunderstandings
+- DIFFERENTIATE between submissions: if one student provides deep analysis with specific examples and another gives superficial responses, their scores should reflect this difference significantly (10-20+ percentage points apart).
+- Do NOT cluster all scores in a narrow range. Some students deserve high marks, others deserve low marks.
+- Be specific about WHY you assigned the score you did.
 
 For each criterion in the rubric:
-1. Identify the most appropriate performance level based on the submission - err on the side of the LOWER level if borderline
-2. Assign a specific score within that level's range - use the LOWER END unless clearly justified
+1. Carefully assess the quality of work for that specific criterion
+2. Assign a score that reflects the actual quality - use the full range available
 3. Provide specific, constructive feedback with inline quotes from the submission
-4. Be explicit about what is MISSING or could be improved
+4. Explain what would be needed for a higher score
 
 When assessing lesson plan critiques and improvements, look for:
 - Identification of specific flaws in the original AI-generated lesson plan (generic critiques = lower marks)
@@ -423,11 +434,11 @@ When assessing lesson plan critiques and improvements, look for:
 
 You MUST respond with valid JSON in this exact format:
 {
-    "total_score": <number>,
+    "total_score": <number - MUST equal the sum of all criterion scores>,
     "criteria_scores": {
         "<criterion_name>": {
             "level": "<level_name>",
-            "score": <number>,
+            "score": <number - must be within the criterion's weight range>,
             "feedback": "<detailed feedback with specific examples>",
             "quotes": ["<relevant quote from submission>", ...]
         }
@@ -442,7 +453,9 @@ You MUST respond with valid JSON in this exact format:
             "type": "<praise|suggestion|correction|question>"
         }
     ]
-}"""
+}
+
+IMPORTANT: total_score MUST equal the sum of all individual criterion scores. Double-check your math."""
 
     context_section = ""
     if assignment_context:
@@ -461,7 +474,13 @@ You MUST respond with valid JSON in this exact format:
 ## STUDENT SUBMISSION
 {submission_text[:15000]}  
 
-Provide a thorough assessment with specific feedback for each criterion. Include at least 3-5 annotations pointing to specific parts of the text. Be STRICT and CRITICAL - identify weaknesses, gaps, and areas needing improvement. Do not give high marks unless truly deserved."""
+Provide a thorough assessment with specific feedback for each criterion. Include at least 3-5 annotations pointing to specific parts of the text. 
+
+GRADING APPROACH:
+- Be fair and balanced - recognize both strengths and weaknesses
+- If a submission demonstrates understanding and effort but has some gaps, score in the Proficient range (60-75%)
+- Only use Inadequate/Developing scores for work that is clearly below expectations
+- Use the full range of scores to differentiate between submissions"""
 
     try:
         response = openai_client.chat.completions.create(
@@ -476,6 +495,19 @@ Provide a thorough assessment with specific feedback for each criterion. Include
         )
         
         result = json.loads(response.choices[0].message.content)
+        
+        # Validate and recalculate total_score from criteria scores
+        if result.get("criteria_scores"):
+            calculated_total = sum(
+                data.get("score", 0) 
+                for data in result["criteria_scores"].values()
+            )
+            # If AI's total is way off, use the calculated total
+            ai_total = result.get("total_score", 0)
+            if abs(ai_total - calculated_total) > 1:
+                print(f"[Score Fix] AI total {ai_total} -> calculated {calculated_total}")
+                result["total_score"] = calculated_total
+        
         return result
         
     except Exception as e:
