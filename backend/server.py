@@ -386,22 +386,31 @@ async def assess_with_ai(
     assignment_context = rubric.get("assignment_context", "")
     submission_requirements = rubric.get("submission_requirements", "")
     
-    system_prompt = """You are an expert academic assessor specializing in education methodology and History pedagogy. Your task is to thoroughly evaluate student submissions against the provided rubric.
+    system_prompt = """You are a STRICT and RIGOROUS academic assessor specializing in education methodology and History pedagogy. Your task is to thoroughly and critically evaluate student submissions against the provided rubric.
+
+IMPORTANT GRADING GUIDELINES:
+- Be STRICT and CRITICAL in your assessment. Do not inflate grades.
+- The average score should be around 65% (approximately 2/3 of total marks).
+- Reserve top marks (80%+) ONLY for truly exceptional work that demonstrates mastery.
+- Most submissions should fall in the 55-70% range unless they show clear excellence or deficiency.
+- Identify specific weaknesses and gaps, not just strengths.
+- Deduct marks for: vague explanations, missing components, superficial analysis, poor structure, lack of evidence.
 
 For each criterion in the rubric:
-1. Identify the most appropriate performance level based on the submission
-2. Assign a specific score within that level's range
+1. Identify the most appropriate performance level based on the submission - err on the side of the LOWER level if borderline
+2. Assign a specific score within that level's range - use the LOWER END unless clearly justified
 3. Provide specific, constructive feedback with inline quotes from the submission
+4. Be explicit about what is MISSING or could be improved
 
 When assessing lesson plan critiques and improvements, look for:
-- Identification of specific flaws in the original AI-generated lesson plan
-- Clear explanation of WHY each flaw is problematic
-- Practical, actionable improvements
+- Identification of specific flaws in the original AI-generated lesson plan (generic critiques = lower marks)
+- Clear explanation of WHY each flaw is problematic (not just stating it's a problem)
+- Practical, actionable improvements (vague suggestions = lower marks)
 - Attention to handling controversial/sensitive content in diverse classrooms
 - Progression from lower to higher order thinking in activities
 - Appropriate assessment alignment
 - Quality of the improved lesson plan template
-- Thoughtful reflection on changes made
+- Thoughtful reflection on changes made (superficial reflection = lower marks)
 
 You MUST respond with valid JSON in this exact format:
 {
@@ -443,7 +452,7 @@ You MUST respond with valid JSON in this exact format:
 ## STUDENT SUBMISSION
 {submission_text[:15000]}  
 
-Provide a thorough assessment with specific feedback for each criterion. Include at least 3-5 annotations pointing to specific parts of the text. Be fair but rigorous in your assessment."""
+Provide a thorough assessment with specific feedback for each criterion. Include at least 3-5 annotations pointing to specific parts of the text. Be STRICT and CRITICAL - identify weaknesses, gaps, and areas needing improvement. Do not give high marks unless truly deserved."""
 
     try:
         response = openai_client.chat.completions.create(
@@ -667,6 +676,66 @@ def extract_student_id(folder_name: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def extract_group_member_ids(text: str, valid_student_ids: set) -> List[str]:
+    """
+    Extract group member student IDs from the first page of a submission.
+    Looks for 8-digit student numbers that exist in the valid_student_ids set.
+    """
+    # Find all 8-digit numbers in the text (typical student ID format)
+    potential_ids = re.findall(r'\b(\d{8})\b', text)
+    
+    # Filter to only include IDs that exist in the grades.csv
+    group_ids = [sid for sid in potential_ids if sid in valid_student_ids]
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_ids = []
+    for sid in group_ids:
+        if sid not in seen:
+            seen.add(sid)
+            unique_ids.append(sid)
+    
+    return unique_ids
+
+
+def get_first_page_text(file_path: Path) -> str:
+    """Extract text from approximately the first page of a document."""
+    suffix = file_path.suffix.lower()
+    
+    if suffix == '.docx':
+        if not DOCX_AVAILABLE:
+            return ""
+        try:
+            doc = Document(str(file_path))
+            # Get first ~500 words (approximately first page)
+            text_parts = []
+            word_count = 0
+            for para in doc.paragraphs:
+                text_parts.append(para.text)
+                word_count += len(para.text.split())
+                if word_count > 500:
+                    break
+            return "\n".join(text_parts)
+        except Exception as e:
+            print(f"[First Page Extract Error] {e}")
+            return ""
+    
+    elif suffix == '.pdf':
+        if not PDF_AVAILABLE:
+            return ""
+        try:
+            with open(file_path, 'rb') as f:
+                reader = PyPDF2.PdfReader(f)
+                if len(reader.pages) > 0:
+                    return reader.pages[0].extract_text() or ""
+            return ""
+        except Exception as e:
+            print(f"[PDF First Page Error] {e}")
+            return ""
+    
+    return ""
+
+
 async def process_efundi_zip(
     zip_path: Path,
     rubric: Dict[str, Any],
@@ -696,15 +765,30 @@ async def process_efundi_zip(
         else:
             root_dir = temp_dir
         
-        # Find grades.csv
+        # Find grades.csv and extract all valid student IDs
         grades_csv = None
+        valid_student_ids = set()
         for f in root_dir.glob("*.csv"):
             if "grade" in f.name.lower():
                 grades_csv = f
+                # Extract all student IDs from the CSV
+                try:
+                    csv_content = grades_csv.read_text(encoding='utf-8-sig')
+                    for line in csv_content.split('\n')[3:]:  # Skip header rows
+                        parts = line.split(',')
+                        if len(parts) >= 2:
+                            sid = parts[1].strip().strip('"')
+                            if sid.isdigit() and len(sid) >= 5:
+                                valid_student_ids.add(sid)
+                except Exception as e:
+                    print(f"[CSV Parse Error] {e}")
                 break
+        
+        print(f"[Found {len(valid_student_ids)} valid student IDs in grades.csv]")
         
         # Process each student folder
         grades_map = {}  # student_id -> score
+        group_grades_map = {}  # Maps group member IDs to their grades
         feedback_files = {}  # student_folder_name -> [(source_path, dest_filename)]
         comments_map = {}  # student_id -> comment text
         
@@ -751,8 +835,28 @@ async def process_efundi_zip(
             percentage = (total_score / total_possible * 100) if total_possible > 0 else 0
             assessment["percentage"] = round(percentage, 2)
             
-            # Store grade for CSV update
+            # Store grade for CSV update - primary student
             grades_map[student_id] = total_score
+            
+            # Check for group members in the first page of the submission
+            first_page_text = get_first_page_text(submission_file)
+            group_member_ids = extract_group_member_ids(first_page_text, valid_student_ids)
+            
+            # If group members found, apply the same grade to all of them
+            if group_member_ids:
+                # Filter out the primary student and any IDs already graded
+                other_members = [gid for gid in group_member_ids if gid != student_id and gid not in grades_map]
+                if other_members:
+                    print(f"[Group Detected] Primary: {student_id}, Members: {other_members}")
+                    assessment["group_members"] = other_members
+                    for member_id in other_members:
+                        grades_map[member_id] = total_score
+                        group_grades_map[member_id] = {
+                            "score": total_score,
+                            "from_student": student_id,
+                            "submission_file": submission_file.name
+                        }
+                        print(f"[Group Grade] {member_id} gets {total_score} (same as {student_id})")
             
             # Create feedback folder for this student
             feedback_folder = student_folder / "Feedback Attachment(s)"
@@ -811,6 +915,27 @@ CRITERIA BREAKDOWN:
             
             results["assessments"].append(assessment)
             results["submissions_processed"] += 1
+        
+        # Add comments for group members in their respective folders
+        for member_id, grade_info in group_grades_map.items():
+            # Find the member's folder
+            for student_folder in root_dir.iterdir():
+                if not student_folder.is_dir():
+                    continue
+                folder_student_id = extract_student_id(student_folder.name)
+                if folder_student_id == member_id:
+                    group_comment = f"""Score: {grade_info['score']}/{total_possible} (Group Submission)
+
+This grade was assigned based on the group submission: {grade_info['submission_file']}
+Primary submitter student ID: {grade_info['from_student']}
+
+Please refer to the feedback in the primary submitter's folder for detailed assessment.
+"""
+                    comments_path = student_folder / "comments.txt"
+                    comments_path.write_text(group_comment, encoding='utf-8')
+                    comments_map[member_id] = group_comment
+                    print(f"[Group Comment] Added comment to {member_id}'s folder")
+                    break
         
         # Update grades.csv in place
         if grades_csv and grades_csv.exists():
