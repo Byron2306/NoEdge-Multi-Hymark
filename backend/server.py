@@ -125,15 +125,24 @@ def extract_text_from_docx(file_path: Path) -> str:
         # Fallback: extract from zip XML
         return _extract_docx_text_fallback(file_path)
     
-    doc = Document(str(file_path))
-    paragraphs = []
-    for para in doc.paragraphs:
-        paragraphs.append(para.text)
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                paragraphs.append(cell.text)
-    return "\n".join(paragraphs)
+    try:
+        doc = Document(str(file_path))
+        paragraphs = []
+        for para in doc.paragraphs:
+            paragraphs.append(para.text)
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    paragraphs.append(cell.text)
+        return "\n".join(paragraphs)
+    except Exception as e:
+        print(f"[DOCX Parse Error] {e}")
+        # Try fallback method
+        try:
+            return _extract_docx_text_fallback(file_path)
+        except Exception as e2:
+            print(f"[DOCX Fallback Error] {e2}")
+            return ""
 
 
 def _extract_docx_text_fallback(file_path: Path) -> str:

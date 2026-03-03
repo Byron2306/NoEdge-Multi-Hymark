@@ -25,24 +25,53 @@ import './App.css';
 
 const API_URL = process.env.REACT_APP_BACKEND_URL || '';
 
-// API helper
+// API helper with timeout support
 const api = {
   async get(endpoint) {
-    const res = await fetch(`${API_URL}${endpoint}`);
-    if (!res.ok) throw new Error(`API Error: ${res.status}`);
-    return res.json();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
+    
+    try {
+      const res = await fetch(`${API_URL}${endpoint}`, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (!res.ok) throw new Error(`API Error: ${res.status}`);
+      return res.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error('Request timed out. Please try again.');
+      }
+      throw error;
+    }
   },
   async post(endpoint, data, isFormData = false) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 minute timeout for AI assessment
+    
     const options = {
       method: 'POST',
       body: isFormData ? data : JSON.stringify(data),
+      signal: controller.signal,
     };
     if (!isFormData) {
       options.headers = { 'Content-Type': 'application/json' };
     }
-    const res = await fetch(`${API_URL}${endpoint}`, options);
-    if (!res.ok) throw new Error(`API Error: ${res.status}`);
-    return res.json();
+    
+    try {
+      const res = await fetch(`${API_URL}${endpoint}`, options);
+      clearTimeout(timeoutId);
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(errorText || `API Error: ${res.status}`);
+      }
+      return res.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error('Assessment is taking longer than expected. Please try again.');
+      }
+      throw error;
+    }
   }
 };
 
