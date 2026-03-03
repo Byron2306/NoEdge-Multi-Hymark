@@ -1837,12 +1837,13 @@ async def efundi_download_and_assess(
                 
                 zip_path = UPLOAD_DIR / f"efundi_{job_id}.zip"
                 
-                # The download button is typically an input[type='submit'] or a button
+                # The download button is a button with class "active" or text "Download"
                 download_btn_selectors = [
+                    "button.active:has-text('Download')",
+                    "button:has-text('Download')",
                     "input[type='submit'][value='Download']",
                     "input.active[type='submit']",
-                    "button:has-text('Download')",
-                    "form input[type='submit']",
+                    "form button.active",
                     "input[name='eventSubmit_doDownload_all']"
                 ]
                 
@@ -1850,11 +1851,14 @@ async def efundi_download_and_assess(
                 for selector in download_btn_selectors:
                     try:
                         loc = page.locator(selector)
-                        if await loc.count() > 0:
+                        count = await loc.count()
+                        update_job_log(f"Download button selector '{selector}' found {count} elements")
+                        if count > 0:
                             download_btn = loc.first
                             update_job_log(f"Found Download button with: {selector}")
                             break
-                    except:
+                    except Exception as e:
+                        update_job_log(f"Button selector error: {e}")
                         continue
                 
                 if not download_btn:
