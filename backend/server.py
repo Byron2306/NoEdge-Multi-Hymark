@@ -563,138 +563,226 @@ def annotate_docx_with_feedback(
     overall_feedback: str,
     criteria_scores: Dict[str, Any] = None,
     total_score: float = 0,
-    total_possible: float = 100
+    total_possible: float = 100,
+    strengths: List[str] = None,
+    improvements: List[str] = None
 ) -> bool:
-    """Add red-text annotations to a DOCX document."""
+    """Add comprehensive annotations to a DOCX document with inline comments, ticks/crosses."""
     if not DOCX_AVAILABLE:
         return False
     
     try:
         doc = Document(str(original_path))
         
-        # Add feedback header at the BEGINNING of the document
+        # Calculate percentage
+        percentage = (total_score / total_possible * 100) if total_possible > 0 else 0
+        
+        # Determine pass/fail symbol
+        grade_symbol = "✓" if percentage >= 50 else "✗"
+        grade_color = RGBColor(0, 128, 0) if percentage >= 50 else RGBColor(255, 0, 0)
+        
+        # === ADD SCORE HEADER AT TOP ===
         if doc.paragraphs:
             first_para = doc.paragraphs[0]
-            feedback_para = first_para.insert_paragraph_before("")
+            header_para = first_para.insert_paragraph_before("")
         else:
-            feedback_para = doc.add_paragraph()
+            header_para = doc.add_paragraph()
         
-        # Header with score
-        percentage = (total_score / total_possible * 100) if total_possible > 0 else 0
-        header_run = feedback_para.add_run(f"{'='*60}\n")
-        header_run.font.color.rgb = RGBColor(255, 0, 0)
+        # Big score box
+        score_box = header_para.add_run(f"\n╔{'═'*50}╗\n")
+        score_box.font.color.rgb = RGBColor(0, 0, 128)
+        score_box.font.bold = True
         
-        score_run = feedback_para.add_run(f"ASSESSMENT FEEDBACK\n")
-        score_run.font.color.rgb = RGBColor(255, 0, 0)
-        score_run.font.bold = True
-        score_run.font.size = Pt(14)
+        score_line = header_para.add_run(f"║  {grade_symbol} FINAL SCORE: {total_score}/{total_possible} ({percentage:.1f}%)  {grade_symbol}".ljust(51) + "║\n")
+        score_line.font.color.rgb = grade_color
+        score_line.font.bold = True
+        score_line.font.size = Pt(14)
         
-        score_detail = feedback_para.add_run(f"Score: {total_score}/{total_possible} ({percentage:.1f}%)\n")
-        score_detail.font.color.rgb = RGBColor(255, 0, 0)
-        score_detail.font.bold = True
-        score_detail.font.size = Pt(12)
+        score_end = header_para.add_run(f"╚{'═'*50}╝\n\n")
+        score_end.font.color.rgb = RGBColor(0, 0, 128)
+        score_end.font.bold = True
         
-        sep_run = feedback_para.add_run(f"{'='*60}\n\n")
-        sep_run.font.color.rgb = RGBColor(255, 0, 0)
-        
-        # Overall feedback
-        overall_header = feedback_para.add_run("OVERALL FEEDBACK:\n")
-        overall_header.font.color.rgb = RGBColor(255, 0, 0)
-        overall_header.font.bold = True
-        
-        overall_text = feedback_para.add_run(f"{overall_feedback}\n\n")
-        overall_text.font.color.rgb = RGBColor(255, 0, 0)
-        overall_text.font.size = Pt(11)
-        
-        # Criteria scores breakdown
-        if criteria_scores:
-            criteria_header = feedback_para.add_run("CRITERIA BREAKDOWN:\n")
-            criteria_header.font.color.rgb = RGBColor(255, 0, 0)
-            criteria_header.font.bold = True
-            
-            for crit_name, crit_data in criteria_scores.items():
-                crit_line = feedback_para.add_run(f"• {crit_name}: {crit_data.get('score', 0)} ({crit_data.get('level', 'N/A')})\n")
-                crit_line.font.color.rgb = RGBColor(200, 0, 0)
-                crit_line.font.size = Pt(10)
-                
-                crit_feedback = feedback_para.add_run(f"  {crit_data.get('feedback', '')}\n\n")
-                crit_feedback.font.color.rgb = RGBColor(150, 0, 0)
-                crit_feedback.font.size = Pt(9)
-                crit_feedback.font.italic = True
-        
-        end_sep = feedback_para.add_run(f"\n{'='*60}\nORIGINAL SUBMISSION BELOW\n{'='*60}\n\n")
-        end_sep.font.color.rgb = RGBColor(255, 0, 0)
-        end_sep.font.bold = True
-        
-        # Track annotations to add inline markers
-        annotation_map = {}
+        # Build annotation lookup for inline insertion
+        inline_annotations = {}
         for i, ann in enumerate(annotations):
-            quote = ann.get("quote", "")
-            comment = ann.get("comment", "")
-            ann_type = ann.get("type", "suggestion")
-            if quote:
-                # Use first 40 chars as key
-                key = quote.lower().strip()[:40]
-                annotation_map[key] = {
-                    "number": i + 1,
-                    "comment": comment,
-                    "type": ann_type
+            quote = ann.get("quote", "").strip()
+            if quote and len(quote) > 10:
+                # Store by first 50 chars lowercase
+                key = quote.lower()[:50]
+                inline_annotations[key] = {
+                    "num": i + 1,
+                    "comment": ann.get("comment", ""),
+                    "type": ann.get("type", "suggestion"),
+                    "used": False
                 }
         
-        # Process paragraphs and add inline annotation markers [*1], [*2], etc.
-        for para in doc.paragraphs[1:]:  # Skip the feedback paragraph we just added
+        # === PROCESS DOCUMENT PARAGRAPHS - ADD INLINE COMMENTS ===
+        for para in doc.paragraphs:
+            if para == header_para:
+                continue
+                
             para_text = para.text.lower()
-            for key, ann_data in annotation_map.items():
-                if key and key in para_text:
-                    # Add annotation marker after the paragraph
-                    marker_run = para.add_run(f" [*{ann_data['number']}]")
-                    marker_run.font.color.rgb = RGBColor(255, 0, 0)
-                    marker_run.font.bold = True
-                    marker_run.font.size = Pt(9)
-                    marker_run.font.superscript = True
-        
-        # Add detailed annotations at the END of the document
-        doc.add_paragraph("")
-        end_para = doc.add_paragraph()
-        
-        ann_header = end_para.add_run(f"\n\n{'='*60}\nDETAILED ANNOTATIONS\n{'='*60}\n\n")
-        ann_header.font.color.rgb = RGBColor(255, 0, 0)
-        ann_header.font.bold = True
-        
-        for i, ann in enumerate(annotations):
-            ann_para = doc.add_paragraph()
             
-            # Annotation number
-            ann_num = ann_para.add_run(f"[{i+1}] ")
-            ann_num.font.color.rgb = RGBColor(255, 0, 0)
-            ann_num.font.bold = True
-            
-            # Type badge
-            ann_type = ann.get("type", "suggestion").upper()
-            type_run = ann_para.add_run(f"({ann_type}) ")
-            type_run.font.color.rgb = RGBColor(180, 0, 0)
-            type_run.font.italic = True
-            type_run.font.size = Pt(10)
-            
-            # Comment
-            comment_run = ann_para.add_run(ann.get("comment", ""))
-            comment_run.font.color.rgb = RGBColor(255, 0, 0)
-            comment_run.font.size = Pt(11)
-            
-            # Quote reference
-            if ann.get("quote"):
-                quote_text = ann["quote"][:150] + "..." if len(ann["quote"]) > 150 else ann["quote"]
-                quote_run = ann_para.add_run(f'\n   Re: "{quote_text}"')
-                quote_run.font.color.rgb = RGBColor(120, 0, 0)
-                quote_run.font.italic = True
-                quote_run.font.size = Pt(9)
+            # Check if any annotation matches this paragraph
+            for key, ann_data in inline_annotations.items():
+                if ann_data["used"]:
+                    continue
+                    
+                if key[:30] in para_text:
+                    # Found a match - add inline comment after paragraph
+                    ann_type = ann_data["type"]
+                    symbol = "✓" if ann_type == "praise" else "✗" if ann_type == "correction" else "→"
+                    color = RGBColor(0, 128, 0) if ann_type == "praise" else RGBColor(255, 0, 0) if ann_type == "correction" else RGBColor(0, 0, 200)
+                    
+                    # Add comment right after the paragraph
+                    comment_run = para.add_run(f"\n   [{symbol} COMMENT {ann_data['num']}]: {ann_data['comment']}")
+                    comment_run.font.color.rgb = color
+                    comment_run.font.size = Pt(9)
+                    comment_run.font.italic = True
+                    
+                    ann_data["used"] = True
+                    break
         
-        # Save to output path
+        # Save annotated document
         doc.save(str(output_path))
+        print(f"[Annotated DOCX] {output_path}")
         return True
         
     except Exception as e:
-        print(f"[Annotation Error] {e}")
+        print(f"[DOCX Annotation Error] {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def create_rubric_feedback_document(
+    output_path: Path,
+    rubric: Dict[str, Any],
+    assessment: Dict[str, Any],
+    student_id: str
+) -> bool:
+    """Create a filled-out rubric document showing scores for each criterion."""
+    if not DOCX_AVAILABLE:
+        return False
+    
+    try:
+        doc = Document()
+        
+        # Title
+        title = doc.add_heading(f"Assessment Rubric - Student {student_id}", 0)
+        title.alignment = 1  # Center
+        
+        # Score summary
+        total_score = assessment.get("total_score", 0)
+        total_marks = rubric.get("total_marks", 25)
+        percentage = (total_score / total_marks * 100) if total_marks > 0 else 0
+        
+        summary = doc.add_paragraph()
+        summary_run = summary.add_run(f"TOTAL SCORE: {total_score}/{total_marks} ({percentage:.1f}%)")
+        summary_run.font.bold = True
+        summary_run.font.size = Pt(14)
+        if percentage >= 50:
+            summary_run.font.color.rgb = RGBColor(0, 128, 0)
+        else:
+            summary_run.font.color.rgb = RGBColor(255, 0, 0)
+        
+        doc.add_paragraph()  # Spacer
+        
+        # Add rubric table
+        criteria_scores = assessment.get("criteria_scores", {})
+        
+        for criterion in rubric.get("criteria", []):
+            crit_name = criterion.get("name", "Unknown")
+            crit_weight = criterion.get("weight", 0)
+            levels = criterion.get("levels", {})
+            
+            # Find the score for this criterion
+            score_data = None
+            for key, data in criteria_scores.items():
+                if crit_name.lower() in key.lower() or key.lower() in crit_name.lower():
+                    score_data = data
+                    break
+            
+            actual_score = score_data.get("score", 0) if score_data else 0
+            actual_level = score_data.get("level", "N/A") if score_data else "N/A"
+            feedback = score_data.get("feedback", "") if score_data else ""
+            
+            # Criterion header
+            crit_heading = doc.add_heading(f"{crit_name} ({crit_weight} marks)", level=2)
+            
+            # Create table for levels
+            table = doc.add_table(rows=len(levels) + 1, cols=4)
+            table.style = 'Table Grid'
+            
+            # Header row
+            header_cells = table.rows[0].cells
+            header_cells[0].text = "Level"
+            header_cells[1].text = "Score Range"
+            header_cells[2].text = "Description"
+            header_cells[3].text = "Achieved"
+            
+            for cell in header_cells:
+                cell.paragraphs[0].runs[0].font.bold = True
+            
+            # Level rows
+            for i, (level_name, level_data) in enumerate(levels.items()):
+                row = table.rows[i + 1]
+                row.cells[0].text = level_name
+                row.cells[1].text = f"{level_data.get('min_score', 0)}-{level_data.get('max_score', 0)}"
+                row.cells[2].text = level_data.get("description", "")[:100]
+                
+                # Check if this is the achieved level
+                if level_name.lower() in actual_level.lower() or actual_level.lower() in level_name.lower():
+                    row.cells[3].text = f"✓ {actual_score}"
+                    # Highlight this row
+                    for cell in row.cells:
+                        for para in cell.paragraphs:
+                            for run in para.runs:
+                                run.font.bold = True
+                else:
+                    row.cells[3].text = ""
+            
+            # Add feedback below table
+            if feedback:
+                feedback_para = doc.add_paragraph()
+                feedback_label = feedback_para.add_run("Feedback: ")
+                feedback_label.font.bold = True
+                feedback_text = feedback_para.add_run(feedback)
+                feedback_text.font.italic = True
+                feedback_text.font.color.rgb = RGBColor(0, 0, 128)
+            
+            doc.add_paragraph()  # Spacer
+        
+        # Strengths and Areas for Improvement
+        doc.add_heading("Summary", level=1)
+        
+        strengths = assessment.get("strengths", [])
+        if strengths:
+            doc.add_heading("Strengths ✓", level=2)
+            for s in strengths:
+                p = doc.add_paragraph(s, style='List Bullet')
+                p.runs[0].font.color.rgb = RGBColor(0, 128, 0)
+        
+        improvements = assessment.get("areas_for_improvement", [])
+        if improvements:
+            doc.add_heading("Areas for Improvement →", level=2)
+            for imp in improvements:
+                p = doc.add_paragraph(imp, style='List Bullet')
+                p.runs[0].font.color.rgb = RGBColor(200, 100, 0)
+        
+        # Overall feedback
+        overall = assessment.get("overall_feedback", "")
+        if overall:
+            doc.add_heading("Overall Feedback", level=2)
+            doc.add_paragraph(overall)
+        
+        # Save
+        doc.save(str(output_path))
+        print(f"[Rubric Document] {output_path}")
+        return True
+        
+    except Exception as e:
+        print(f"[Rubric Document Error] {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -1082,6 +1170,12 @@ async def process_efundi_zip(
                 if success:
                     feedback_files[student_folder.name].append(annotated_path)
                     print(f"[Annotated] {annotated_path}")
+                
+                # Also create filled rubric document
+                rubric_filename = f"{submission_file.stem}_RUBRIC.docx"
+                rubric_path = feedback_folder / rubric_filename
+                create_rubric_feedback_document(rubric_path, rubric, assessment, student_id)
+                feedback_files[student_folder.name].append(rubric_path)
             
             elif submission_file.suffix.lower() == '.pdf':
                 # Try to annotate PDF with PyMuPDF
@@ -1106,6 +1200,12 @@ async def process_efundi_zip(
                     feedback_txt_path = feedback_folder / f"{submission_file.stem}_FEEDBACK.txt"
                     create_feedback_txt(feedback_txt_path, assessment)
                     feedback_files[student_folder.name].append(feedback_txt_path)
+                
+                # Also create filled rubric document for PDF submissions
+                rubric_filename = f"{submission_file.stem}_RUBRIC.docx"
+                rubric_path = feedback_folder / rubric_filename
+                create_rubric_feedback_document(rubric_path, rubric, assessment, student_id)
+                feedback_files[student_folder.name].append(rubric_path)
             
             # Create/update comments.txt with the overall feedback
             comments_txt = f"""Score: {total_score}/{total_possible} ({percentage:.1f}%)
