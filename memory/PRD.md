@@ -67,9 +67,19 @@ Frontend (React)         Backend (FastAPI)          Database (MongoDB)
 - [x] **Expandable Rubric Criteria** - Click criteria to see level descriptions and score ranges
 - [x] **Live Progress Monitoring** - Real-time progress overlay during bulk assessment
 
-### Backend Features (New)
-- [x] **PDF Annotation Support** - Using PyMuPDF to annotate PDFs with scores and feedback
+### Backend Features (New - March 10, 2026)
+- [x] **PDF Annotation Support** - Using PyMuPDF for highlights, sticky notes, score box
 - [x] **Live Job Progress** - Real-time updates to database during processing
+- [x] **Assignment Instructions** - Upload or paste task instructions for AI context
+- [x] **Improved DOCX Annotations**:
+  - Front page score box with ✓/✗ pass/fail symbol
+  - Criteria breakdown with ticks/crosses
+  - Inline comments with symbols ([✓ #1], [✗ #2], [→ #3])
+  - Short summary feedback
+- [x] **Two Feedback Files Per Student**:
+  - Annotated submission (score + inline comments)
+  - Filled rubric document (criteria table with achieved levels)
+- [x] **History-Specific Feedback** - AI prompt includes historical thinking skills
 
 ### AI Integration
 - [x] GPT-4o for essay assessment

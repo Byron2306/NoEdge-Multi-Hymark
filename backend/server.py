@@ -567,7 +567,7 @@ def annotate_docx_with_feedback(
     strengths: List[str] = None,
     improvements: List[str] = None
 ) -> bool:
-    """Add comprehensive annotations to a DOCX document with inline comments, ticks/crosses."""
+    """Add comprehensive annotations to a DOCX document with front page summary and inline comments."""
     if not DOCX_AVAILABLE:
         return False
     
@@ -576,66 +576,129 @@ def annotate_docx_with_feedback(
         
         # Calculate percentage
         percentage = (total_score / total_possible * 100) if total_possible > 0 else 0
-        
-        # Determine pass/fail symbol
+        pass_fail = "PASS" if percentage >= 50 else "FAIL"
         grade_symbol = "✓" if percentage >= 50 else "✗"
-        grade_color = RGBColor(0, 128, 0) if percentage >= 50 else RGBColor(255, 0, 0)
         
-        # === ADD SCORE HEADER AT TOP ===
+        # Colors
+        GREEN = RGBColor(0, 128, 0)
+        RED = RGBColor(200, 0, 0)
+        BLUE = RGBColor(0, 0, 150)
+        ORANGE = RGBColor(200, 100, 0)
+        grade_color = GREEN if percentage >= 50 else RED
+        
+        # === FRONT PAGE: ASSESSMENT SUMMARY ===
         if doc.paragraphs:
             first_para = doc.paragraphs[0]
-            header_para = first_para.insert_paragraph_before("")
+            summary_para = first_para.insert_paragraph_before("")
         else:
-            header_para = doc.add_paragraph()
+            summary_para = doc.add_paragraph()
         
-        # Big score box
-        score_box = header_para.add_run(f"\n╔{'═'*50}╗\n")
-        score_box.font.color.rgb = RGBColor(0, 0, 128)
-        score_box.font.bold = True
+        # Header box with score
+        box_top = summary_para.add_run("┌" + "─" * 60 + "┐\n")
+        box_top.font.color.rgb = BLUE
+        box_top.font.bold = True
         
-        score_line = header_para.add_run(f"║  {grade_symbol} FINAL SCORE: {total_score}/{total_possible} ({percentage:.1f}%)  {grade_symbol}".ljust(51) + "║\n")
-        score_line.font.color.rgb = grade_color
-        score_line.font.bold = True
-        score_line.font.size = Pt(14)
+        title_line = summary_para.add_run("│" + "  ASSESSMENT FEEDBACK".center(60) + "│\n")
+        title_line.font.color.rgb = BLUE
+        title_line.font.bold = True
+        title_line.font.size = Pt(14)
         
-        score_end = header_para.add_run(f"╚{'═'*50}╝\n\n")
-        score_end.font.color.rgb = RGBColor(0, 0, 128)
-        score_end.font.bold = True
+        score_text = f"│  {grade_symbol} SCORE: {total_score:.1f}/{total_possible} ({percentage:.1f}%) - {pass_fail}  {grade_symbol}".ljust(61) + "│\n"
+        score_run = summary_para.add_run(score_text)
+        score_run.font.color.rgb = grade_color
+        score_run.font.bold = True
+        score_run.font.size = Pt(12)
         
-        # Build annotation lookup for inline insertion
-        inline_annotations = {}
+        box_bottom = summary_para.add_run("└" + "─" * 60 + "┘\n\n")
+        box_bottom.font.color.rgb = BLUE
+        box_bottom.font.bold = True
+        
+        # Criteria breakdown
+        if criteria_scores:
+            criteria_header = summary_para.add_run("CRITERIA BREAKDOWN:\n")
+            criteria_header.font.color.rgb = BLUE
+            criteria_header.font.bold = True
+            criteria_header.font.size = Pt(11)
+            
+            for crit_name, crit_data in criteria_scores.items():
+                score = crit_data.get("score", 0)
+                level = crit_data.get("level", "N/A")
+                # Determine tick/cross based on level
+                crit_symbol = "✓" if "excellent" in level.lower() or "proficient" in level.lower() else "→" if "developing" in level.lower() else "✗"
+                crit_color = GREEN if crit_symbol == "✓" else ORANGE if crit_symbol == "→" else RED
+                
+                crit_line = summary_para.add_run(f"  {crit_symbol} {crit_name}: {score} ({level})\n")
+                crit_line.font.color.rgb = crit_color
+                crit_line.font.size = Pt(10)
+        
+        summary_para.add_run("\n")
+        
+        # Quick feedback summary
+        feedback_header = summary_para.add_run("SUMMARY FEEDBACK:\n")
+        feedback_header.font.color.rgb = BLUE
+        feedback_header.font.bold = True
+        
+        # Truncate feedback to ~300 chars for summary
+        short_feedback = overall_feedback[:400] + "..." if len(overall_feedback) > 400 else overall_feedback
+        feedback_text = summary_para.add_run(short_feedback + "\n\n")
+        feedback_text.font.color.rgb = RGBColor(80, 80, 80)
+        feedback_text.font.size = Pt(10)
+        feedback_text.font.italic = True
+        
+        # Separator before original content
+        separator = summary_para.add_run("─" * 62 + "\nORIGINAL SUBMISSION WITH ANNOTATIONS BELOW\n" + "─" * 62 + "\n\n")
+        separator.font.color.rgb = BLUE
+        separator.font.bold = True
+        
+        # === INLINE ANNOTATIONS ===
+        # Build lookup dictionary for matching quotes
+        annotation_lookup = {}
         for i, ann in enumerate(annotations):
             quote = ann.get("quote", "").strip()
-            if quote and len(quote) > 10:
-                # Store by first 50 chars lowercase
-                key = quote.lower()[:50]
-                inline_annotations[key] = {
+            if quote and len(quote) > 15:
+                # Use multiple key lengths for better matching
+                key_short = quote.lower()[:30]
+                key_med = quote.lower()[:50]
+                annotation_lookup[key_short] = {
                     "num": i + 1,
+                    "quote": quote,
                     "comment": ann.get("comment", ""),
                     "type": ann.get("type", "suggestion"),
                     "used": False
                 }
+                if key_med != key_short:
+                    annotation_lookup[key_med] = annotation_lookup[key_short]
         
-        # === PROCESS DOCUMENT PARAGRAPHS - ADD INLINE COMMENTS ===
+        # Process each paragraph and add inline comments
         for para in doc.paragraphs:
-            if para == header_para:
+            if para == summary_para:
                 continue
-                
-            para_text = para.text.lower()
             
-            # Check if any annotation matches this paragraph
-            for key, ann_data in inline_annotations.items():
+            para_text_lower = para.text.lower()
+            
+            # Try to find matching annotations
+            for key, ann_data in annotation_lookup.items():
                 if ann_data["used"]:
                     continue
-                    
-                if key[:30] in para_text:
-                    # Found a match - add inline comment after paragraph
+                
+                if key in para_text_lower:
+                    # Found match - add inline comment
                     ann_type = ann_data["type"]
-                    symbol = "✓" if ann_type == "praise" else "✗" if ann_type == "correction" else "→"
-                    color = RGBColor(0, 128, 0) if ann_type == "praise" else RGBColor(255, 0, 0) if ann_type == "correction" else RGBColor(0, 0, 200)
                     
-                    # Add comment right after the paragraph
-                    comment_run = para.add_run(f"\n   [{symbol} COMMENT {ann_data['num']}]: {ann_data['comment']}")
+                    # Symbols and colors based on type
+                    if ann_type == "praise":
+                        symbol = "✓"
+                        color = GREEN
+                    elif ann_type == "correction":
+                        symbol = "✗"
+                        color = RED
+                    else:  # suggestion, question
+                        symbol = "→"
+                        color = ORANGE
+                    
+                    # Add comment after paragraph
+                    comment_text = f"\n   [{symbol} #{ann_data['num']}] {ann_data['comment']}"
+                    comment_run = para.add_run(comment_text)
                     comment_run.font.color.rgb = color
                     comment_run.font.size = Pt(9)
                     comment_run.font.italic = True
@@ -643,7 +706,7 @@ def annotate_docx_with_feedback(
                     ann_data["used"] = True
                     break
         
-        # Save annotated document
+        # Save
         doc.save(str(output_path))
         print(f"[Annotated DOCX] {output_path}")
         return True
@@ -846,88 +909,127 @@ def annotate_pdf_with_feedback(
         return False
     
     try:
-        # Open the PDF
         doc = fitz.open(str(original_path))
-        
-        # Create a new page at the beginning for feedback summary
-        # We'll insert a page and add text to it
-        
-        # First, let's add sticky note annotations to the first page
         first_page = doc[0]
+        page_width = first_page.rect.width
         
-        # Add a header annotation at the top of first page
         percentage = (total_score / total_marks * 100) if total_marks > 0 else 0
-        header_text = f"""ASSESSMENT FEEDBACK
-Score: {total_score}/{total_marks} ({percentage:.1f}%)
-
-{overall_feedback[:500]}"""
+        pass_fail = "PASS" if percentage >= 50 else "FAIL"
+        symbol = "✓" if percentage >= 50 else "✗"
+        score_color = (0, 0.5, 0) if percentage >= 50 else (0.8, 0, 0)
         
-        # Insert text annotation (sticky note) at top left
-        rect = fitz.Rect(10, 10, 250, 30)
-        first_page.add_text_annot(
-            rect.tl,  # top-left point
-            header_text,
-            icon="Note"
-        )
-        
-        # Add colored rectangle with score at top
-        score_rect = fitz.Rect(10, 10, 200, 50)
-        score_color = (0.2, 0.7, 0.3) if percentage >= 50 else (0.9, 0.2, 0.2)
+        # === ADD SCORE BOX AT TOP OF FIRST PAGE ===
+        # Draw background rectangle
+        score_box = fitz.Rect(10, 10, page_width - 10, 90)
         shape = first_page.new_shape()
-        shape.draw_rect(score_rect)
-        shape.finish(color=(0.8, 0, 0), fill=None, width=2)
+        shape.draw_rect(score_box)
+        shape.finish(color=(0, 0, 0.5), fill=(0.95, 0.95, 1), width=2)
         shape.commit()
         
-        # Insert score text
+        # Add main score text
+        score_text = f"{symbol} SCORE: {total_score:.1f}/{total_marks} ({percentage:.1f}%) - {pass_fail} {symbol}"
         first_page.insert_text(
-            fitz.Point(15, 35),
-            f"SCORE: {total_score}/{total_marks} ({percentage:.1f}%)",
-            fontsize=14,
-            color=(0.8, 0, 0),
+            fitz.Point(20, 35),
+            score_text,
+            fontsize=16,
+            color=score_color,
             fontname="helv"
         )
         
-        # Add criteria scores as annotations on first page
+        # Add criteria summary below score
+        y_pos = 55
         if criteria_scores:
-            y_pos = 60
-            for crit_name, crit_data in criteria_scores.items():
-                score_text = f"{crit_name}: {crit_data.get('score', 0)} - {crit_data.get('level', 'N/A')}"
+            for crit_name, crit_data in list(criteria_scores.items())[:3]:  # First 3 criteria
+                score = crit_data.get("score", 0)
+                level = crit_data.get("level", "N/A")
+                crit_symbol = "✓" if "excellent" in level.lower() or "proficient" in level.lower() else "✗"
+                crit_color = (0, 0.5, 0) if crit_symbol == "✓" else (0.8, 0.4, 0)
+                
                 first_page.insert_text(
-                    fitz.Point(15, y_pos),
-                    score_text,
+                    fitz.Point(20, y_pos),
+                    f"{crit_symbol} {crit_name[:30]}: {score}",
                     fontsize=9,
-                    color=(0.5, 0, 0),
+                    color=crit_color,
                     fontname="helv"
                 )
-                y_pos += 15
+                y_pos += 12
         
-        # Add annotations throughout the document
+        # === ADD STICKY NOTE WITH FULL FEEDBACK ===
+        full_feedback = f"""ASSESSMENT FEEDBACK
+─────────────────────────
+Score: {total_score}/{total_marks} ({percentage:.1f}%)
+
+SUMMARY:
+{overall_feedback[:600]}
+
+CRITERIA:
+"""
+        for crit_name, crit_data in (criteria_scores or {}).items():
+            full_feedback += f"\n• {crit_name}: {crit_data.get('score', 0)} ({crit_data.get('level', 'N/A')})"
+        
+        # Add main feedback sticky note
+        first_page.add_text_annot(
+            fitz.Point(page_width - 30, 10),
+            full_feedback,
+            icon="Comment"
+        )
+        
+        # === ADD ANNOTATIONS THROUGHOUT DOCUMENT ===
         for i, ann in enumerate(annotations):
             quote = ann.get("quote", "")
             comment = ann.get("comment", "")
             ann_type = ann.get("type", "suggestion")
             
-            # Search for the quote in all pages
+            # Determine icon based on type
+            if ann_type == "praise":
+                icon = "Check"
+            elif ann_type == "correction":
+                icon = "Cross"
+            else:
+                icon = "Note"
+            
+            # Search for quote in all pages
+            found = False
             for page_num in range(len(doc)):
                 page = doc[page_num]
-                text_instances = page.search_for(quote[:50] if len(quote) > 50 else quote)
+                
+                # Search for the text
+                search_text = quote[:60] if len(quote) > 60 else quote
+                text_instances = page.search_for(search_text)
                 
                 if text_instances:
+                    inst = text_instances[0]
+                    
                     # Add highlight annotation
-                    for inst in text_instances[:1]:  # Only highlight first instance
-                        highlight = page.add_highlight_annot(inst)
-                        highlight.set_colors(stroke=(1, 0.8, 0))  # Yellow highlight
-                        highlight.update()
-                        
-                        # Add comment annotation next to highlighted text
-                        ann_text = f"[{i+1}] ({ann_type.upper()})\n{comment}"
-                        page.add_text_annot(inst.tl, ann_text, icon="Comment")
+                    highlight = page.add_highlight_annot(inst)
+                    if ann_type == "praise":
+                        highlight.set_colors(stroke=(0.7, 1, 0.7))  # Light green
+                    elif ann_type == "correction":
+                        highlight.set_colors(stroke=(1, 0.7, 0.7))  # Light red
+                    else:
+                        highlight.set_colors(stroke=(1, 1, 0.5))  # Yellow
+                    highlight.update()
+                    
+                    # Add comment annotation near the highlighted text
+                    ann_text = f"[{i+1}] {ann_type.upper()}\n{comment}"
+                    page.add_text_annot(
+                        fitz.Point(inst.x1 + 5, inst.y0),
+                        ann_text,
+                        icon=icon
+                    )
+                    found = True
                     break
+            
+            if not found and i < 5:  # Add first 5 unfound annotations to first page
+                first_page.add_text_annot(
+                    fitz.Point(page_width - 30, 100 + i * 20),
+                    f"[{i+1}] {ann_type.upper()}: {comment}",
+                    icon=icon
+                )
         
-        # Save the annotated PDF
+        # Save
         doc.save(str(output_path))
         doc.close()
-        
         print(f"[PDF Annotated] {output_path}")
         return True
         
@@ -1010,7 +1112,8 @@ async def process_efundi_zip(
     zip_path: Path,
     rubric: Dict[str, Any],
     output_dir: Path,
-    progress_callback: callable = None
+    progress_callback: callable = None,
+    instructions: str = None
 ) -> Dict[str, Any]:
     """Process an eFundi assignment zip file and assess all submissions."""
     
@@ -1110,7 +1213,7 @@ async def process_efundi_zip(
             
             # Run AI assessment
             print(f"[Processing] Student {student_id}: {submission_file.name}")
-            assessment = await assess_with_ai(submission_text, rubric)
+            assessment = await assess_with_ai(submission_text, rubric, instructions)
             
             assessment["student_id"] = student_id
             assessment["student_folder"] = student_folder.name
@@ -1742,7 +1845,9 @@ async def assess_single_submission(
 async def assess_bulk_zip(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    rubric_id: str = Form(...)
+    rubric_id: str = Form(...),
+    instructions: Optional[str] = Form(None),
+    instructions_file: Optional[UploadFile] = File(None)
 ):
     """Process an eFundi zip file with multiple submissions."""
     
@@ -1750,6 +1855,24 @@ async def assess_bulk_zip(
     rubric = rubrics_collection.find_one({"_id": ObjectId(rubric_id)})
     if not rubric:
         raise HTTPException(status_code=404, detail="Rubric not found")
+    
+    # Process instructions
+    assignment_instructions = instructions or ""
+    if instructions_file and instructions_file.filename:
+        instructions_content = await instructions_file.read()
+        if instructions_file.filename.endswith('.txt'):
+            assignment_instructions = instructions_content.decode('utf-8', errors='ignore')
+        elif instructions_file.filename.endswith('.docx'):
+            # Extract text from DOCX
+            temp_instructions = UPLOAD_DIR / f"instructions_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
+            temp_instructions.write_bytes(instructions_content)
+            assignment_instructions = extract_document_content(temp_instructions)
+            temp_instructions.unlink(missing_ok=True)
+        elif instructions_file.filename.endswith('.pdf'):
+            temp_instructions = UPLOAD_DIR / f"instructions_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
+            temp_instructions.write_bytes(instructions_content)
+            assignment_instructions = extract_document_content(temp_instructions)
+            temp_instructions.unlink(missing_ok=True)
     
     # Save zip
     zip_path = UPLOAD_DIR / file.filename
@@ -1765,6 +1888,7 @@ async def assess_bulk_zip(
         "rubric_id": str(rubric["_id"]),
         "rubric_name": rubric["name"],
         "zip_file": file.filename,
+        "instructions": assignment_instructions[:2000] if assignment_instructions else None,  # Store truncated
         "created_at": datetime.now(timezone.utc).isoformat(),
         "progress": 0,
         "total": 0,
@@ -1790,7 +1914,7 @@ async def assess_bulk_zip(
                     }}
                 )
             
-            results = await process_efundi_zip(zip_path, rubric, output_dir, update_progress)
+            results = await process_efundi_zip(zip_path, rubric, output_dir, update_progress, assignment_instructions)
             
             jobs_collection.update_one(
                 {"job_id": job_id},

@@ -794,6 +794,10 @@ function App() {
   const [efundiPassword, setEfundiPassword] = useState('');
   const [assignmentUrl, setAssignmentUrl] = useState('');
   const [assignmentName, setAssignmentName] = useState('');
+  
+  // Assignment instructions state
+  const [assignmentInstructions, setAssignmentInstructions] = useState('');
+  const [instructionsFile, setInstructionsFile] = useState(null);
 
   // Toast helpers
   const showToast = (message, type = 'info') => {
@@ -967,6 +971,14 @@ function App() {
       formData.append('file', file);
       formData.append('rubric_id', selectedRubric._id);
       
+      // Add instructions if provided
+      if (assignmentInstructions) {
+        formData.append('instructions', assignmentInstructions);
+      }
+      if (instructionsFile) {
+        formData.append('instructions_file', instructionsFile);
+      }
+      
       const result = await api.post('/api/assess/single', formData, true);
       showToast(`Assessment complete! Score: ${result.total_score?.toFixed(1)}/${result.max_score}`, 'success');
       setSelectedAssessment(result);
@@ -991,7 +1003,16 @@ function App() {
       formData.append('file', file);
       formData.append('rubric_id', selectedRubric._id);
       
+      // Add instructions if provided
+      if (assignmentInstructions) {
+        formData.append('instructions', assignmentInstructions);
+      }
+      if (instructionsFile) {
+        formData.append('instructions_file', instructionsFile);
+      }
+      
       const result = await api.post('/api/assess/bulk', formData, true);
+      showToast(`Bulk assessment started! Job ID: ${result.job_id}`, 'success');
       showToast(`Bulk assessment started! Job ID: ${result.job_id}`, 'success');
       
       // Start live monitoring
@@ -1150,6 +1171,84 @@ function App() {
                       onSelect={setSelectedRubric}
                     />
                   ))}
+                </div>
+              )}
+            </section>
+
+            {/* Assignment Instructions Section */}
+            <section className="section instructions-section">
+              <h2 className="section-title">
+                <FileText size={22} />
+                Assignment Instructions
+              </h2>
+              <p className="section-description">
+                Provide the assignment task/instructions so the AI knows what students were supposed to do.
+              </p>
+              
+              <div className="instructions-container">
+                <div className="instructions-upload">
+                  <FileDropzone
+                    onFileSelect={(file) => {
+                      setInstructionsFile(file);
+                      // Read file content
+                      const reader = new FileReader();
+                      reader.onload = (e) => {
+                        if (file.name.endsWith('.txt')) {
+                          setAssignmentInstructions(e.target.result);
+                        }
+                      };
+                      if (file.name.endsWith('.txt')) {
+                        reader.readAsText(file);
+                      }
+                      showToast(`Instructions file loaded: ${file.name}`, 'success');
+                    }}
+                    accept=".docx,.pdf,.txt"
+                    label="Upload Instructions (DOCX/PDF/TXT)"
+                    icon={FileText}
+                  />
+                  {instructionsFile && (
+                    <div className="file-loaded-badge">
+                      <CheckCircle size={16} />
+                      <span>{instructionsFile.name}</span>
+                      <button 
+                        className="clear-btn"
+                        onClick={() => { setInstructionsFile(null); setAssignmentInstructions(''); }}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+                
+                <div className="instructions-divider">
+                  <span>OR</span>
+                </div>
+                
+                <div className="instructions-text">
+                  <textarea
+                    className="instructions-textarea"
+                    placeholder="Paste or type the assignment instructions here...
+
+Example:
+Assignment 1: AI Lesson Plan Critique
+
+Task: Critique the attached AI-generated lesson plan and create an improved version.
+
+Part A: Identify at least 3 flaws in the AI lesson plan
+Part B: Create an improved lesson plan addressing these issues
+Part C: Reflect on how your improvements enhance historical thinking skills"
+                    value={assignmentInstructions}
+                    onChange={(e) => setAssignmentInstructions(e.target.value)}
+                    rows={8}
+                    data-testid="assignment-instructions"
+                  />
+                </div>
+              </div>
+              
+              {assignmentInstructions && (
+                <div className="instructions-preview">
+                  <h4>Instructions Preview:</h4>
+                  <p>{assignmentInstructions.substring(0, 300)}...</p>
                 </div>
               )}
             </section>
