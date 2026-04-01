@@ -1091,70 +1091,135 @@ function ExamBuilderTab({ showToast }) {
         <section className="section exam-preview-section">
           <h2 className="section-title">
             <FileCheck size={22} />
-            Generated Exam
+            Generated Exam Set
           </h2>
           
-          <div className="exam-preview-card">
-            <div className="exam-preview-header">
-              <div>
-                <h3>{generatedExam.module_code}: {generatedExam.module_name}</h3>
-                <p>Total: {generatedExam.calculated_total || generatedExam.total_marks} marks | Duration: {generatedExam.duration_hours} hours</p>
-              </div>
-              <div className="exam-download-buttons">
-                <button
-                  className="download-exam-btn"
-                  onClick={() => handleDownloadExam(generatedExam.filename)}
-                  data-testid="download-generated-exam"
-                >
-                  <Download size={18} />
-                  Exam Paper
-                </button>
-                {generatedExam.memo_filename && (
-                  <button
-                    className="download-memo-btn"
-                    onClick={() => handleDownloadExam(generatedExam.memo_filename)}
-                    data-testid="download-generated-memo"
-                  >
-                    <FileCheck size={18} />
-                    Memorandum
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="exam-sections-preview">
-              {/* Source Questions */}
-              {generatedExam.source_questions?.map((sq, i) => (
-                <div key={i} className="exam-section-preview">
-                  <h4>Question {i + 1}: {sq.topic} ({sq.total_marks} marks)</h4>
-                  <p className="source-count">{sq.sources?.length || 0} historical sources, {sq.questions?.length || 0} questions</p>
-                  <div className="sources-list">
-                    {sq.sources?.map((source, j) => (
-                      <span key={j} className="source-tag">
-                        {source.label}: {source.type}
-                      </span>
-                    ))}
+          <div className="exam-set-container">
+            {/* First Opportunity */}
+            {generatedExam.first_opportunity && (
+              <div className="exam-preview-card opportunity-card">
+                <div className="opportunity-badge first-opp">1st Opportunity</div>
+                <div className="exam-preview-header">
+                  <div>
+                    <h3>{generatedExam.module_code}: {generatedExam.module_name}</h3>
+                    <p>Total: {generatedExam.calculated_total || generatedExam.total_marks} marks | Duration: {generatedExam.duration_hours} hours</p>
+                  </div>
+                  <div className="exam-download-buttons">
+                    <button
+                      className="download-exam-btn"
+                      onClick={() => handleDownloadExam(generatedExam.first_opportunity.filename)}
+                      data-testid="download-1st-exam"
+                    >
+                      <Download size={18} />
+                      Exam
+                    </button>
+                    <button
+                      className="download-memo-btn"
+                      onClick={() => handleDownloadExam(generatedExam.first_opportunity.memo_filename)}
+                      data-testid="download-1st-memo"
+                    >
+                      <FileCheck size={18} />
+                      Memo
+                    </button>
                   </div>
                 </div>
-              ))}
-
-              {/* Methodology */}
-              {generatedExam.methodology_question && (
-                <div className="exam-section-preview">
-                  <h4>Question {(generatedExam.source_questions?.length || 0) + 1}: Methodology ({generatedExam.methodology_question.marks} marks)</h4>
-                  <p>{generatedExam.methodology_question.topic}</p>
+                <div className="exam-sections-preview compact">
+                  {generatedExam.first_opportunity.source_questions?.map((sq, i) => (
+                    <div key={i} className="exam-section-mini">
+                      <span className="section-label">Q{i + 1}:</span>
+                      <span>{sq.topic}</span>
+                      <span className="source-count-mini">{sq.sources?.length} sources</span>
+                    </div>
+                  ))}
+                  <div className="exam-section-mini">
+                    <span className="section-label">Q3:</span>
+                    <span>Methodology - {generatedExam.first_opportunity.methodology_question?.topic}</span>
+                  </div>
+                  <div className="exam-section-mini">
+                    <span className="section-label">Q4:</span>
+                    <span>Essay - {generatedExam.first_opportunity.essay_question?.question?.substring(0, 60)}...</span>
+                  </div>
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Essay */}
-              {generatedExam.essay_question && (
-                <div className="exam-section-preview">
-                  <h4>Question {(generatedExam.source_questions?.length || 0) + 2}: Essay ({generatedExam.essay_question.marks} marks)</h4>
-                  <p>{generatedExam.essay_question.topic}</p>
-                  <p className="essay-preview">{generatedExam.essay_question.question?.substring(0, 150)}...</p>
+            {/* Second Opportunity */}
+            {generatedExam.second_opportunity && (
+              <div className="exam-preview-card opportunity-card">
+                <div className="opportunity-badge second-opp">2nd Opportunity</div>
+                <div className="exam-preview-header">
+                  <div>
+                    <h3>{generatedExam.module_code}: {generatedExam.module_name}</h3>
+                    <p>Total: {generatedExam.calculated_total || generatedExam.total_marks} marks | Duration: {generatedExam.duration_hours} hours</p>
+                  </div>
+                  <div className="exam-download-buttons">
+                    <button
+                      className="download-exam-btn second"
+                      onClick={() => handleDownloadExam(generatedExam.second_opportunity.filename)}
+                      data-testid="download-2nd-exam"
+                    >
+                      <Download size={18} />
+                      Exam
+                    </button>
+                    <button
+                      className="download-memo-btn second"
+                      onClick={() => handleDownloadExam(generatedExam.second_opportunity.memo_filename)}
+                      data-testid="download-2nd-memo"
+                    >
+                      <FileCheck size={18} />
+                      Memo
+                    </button>
+                  </div>
                 </div>
-              )}
-            </div>
+                <div className="exam-sections-preview compact">
+                  {generatedExam.second_opportunity.source_questions?.map((sq, i) => (
+                    <div key={i} className="exam-section-mini">
+                      <span className="section-label">Q{i + 1}:</span>
+                      <span>{sq.topic}</span>
+                      <span className="source-count-mini">{sq.sources?.length} sources</span>
+                    </div>
+                  ))}
+                  <div className="exam-section-mini">
+                    <span className="section-label">Q3:</span>
+                    <span>Methodology - {generatedExam.second_opportunity.methodology_question?.topic}</span>
+                  </div>
+                  <div className="exam-section-mini">
+                    <span className="section-label">Q4:</span>
+                    <span>Essay - {generatedExam.second_opportunity.essay_question?.question?.substring(0, 60)}...</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Fallback for legacy format (single exam) */}
+            {!generatedExam.first_opportunity && generatedExam.filename && (
+              <div className="exam-preview-card">
+                <div className="exam-preview-header">
+                  <div>
+                    <h3>{generatedExam.module_code}: {generatedExam.module_name}</h3>
+                    <p>Total: {generatedExam.calculated_total || generatedExam.total_marks} marks</p>
+                  </div>
+                  <div className="exam-download-buttons">
+                    <button
+                      className="download-exam-btn"
+                      onClick={() => handleDownloadExam(generatedExam.filename)}
+                    >
+                      <Download size={18} />
+                      Exam
+                    </button>
+                    {generatedExam.memo_filename && (
+                      <button
+                        className="download-memo-btn"
+                        onClick={() => handleDownloadExam(generatedExam.memo_filename)}
+                      >
+                        <FileCheck size={18} />
+                        Memo
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -1164,32 +1229,75 @@ function ExamBuilderTab({ showToast }) {
         <section className="section">
           <h2 className="section-title">
             <Clock size={22} />
-            Recent Exams
+            Recent Exam Sets
           </h2>
           <div className="recent-exams-list">
             {recentExams.slice(0, 5).map((exam, i) => (
-              <div key={exam._id || i} className="recent-exam-card">
+              <div key={exam._id || i} className="recent-exam-card expanded">
                 <div className="recent-exam-info">
                   <span className="exam-code">{exam.module_code}</span>
                   <span className="exam-date">{new Date(exam.created_at).toLocaleDateString()}</span>
                   <span className="exam-marks">{exam.calculated_total || exam.total_marks} marks</span>
                 </div>
-                <div className="recent-exam-actions">
-                  <button
-                    className="download-btn-small"
-                    onClick={() => handleDownloadExam(exam.filename)}
-                    title="Download Exam Paper"
-                  >
-                    <Download size={14} />
-                  </button>
-                  {exam.memo_filename && (
-                    <button
-                      className="download-btn-small memo-btn"
-                      onClick={() => handleDownloadExam(exam.memo_filename)}
-                      title="Download Memorandum"
-                    >
-                      <FileCheck size={14} />
-                    </button>
+                <div className="recent-exam-downloads">
+                  {/* New format with both opportunities */}
+                  {exam.first_opportunity ? (
+                    <>
+                      <div className="opp-download-group">
+                        <span className="opp-label">1st:</span>
+                        <button
+                          className="download-btn-small"
+                          onClick={() => handleDownloadExam(exam.first_opportunity.filename)}
+                          title="1st Opportunity Exam"
+                        >
+                          <Download size={14} />
+                        </button>
+                        <button
+                          className="download-btn-small memo-btn"
+                          onClick={() => handleDownloadExam(exam.first_opportunity.memo_filename)}
+                          title="1st Opportunity Memo"
+                        >
+                          <FileCheck size={14} />
+                        </button>
+                      </div>
+                      <div className="opp-download-group">
+                        <span className="opp-label">2nd:</span>
+                        <button
+                          className="download-btn-small second"
+                          onClick={() => handleDownloadExam(exam.second_opportunity.filename)}
+                          title="2nd Opportunity Exam"
+                        >
+                          <Download size={14} />
+                        </button>
+                        <button
+                          className="download-btn-small memo-btn second"
+                          onClick={() => handleDownloadExam(exam.second_opportunity.memo_filename)}
+                          title="2nd Opportunity Memo"
+                        >
+                          <FileCheck size={14} />
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    /* Legacy format */
+                    <div className="recent-exam-actions">
+                      <button
+                        className="download-btn-small"
+                        onClick={() => handleDownloadExam(exam.filename)}
+                        title="Download Exam Paper"
+                      >
+                        <Download size={14} />
+                      </button>
+                      {exam.memo_filename && (
+                        <button
+                          className="download-btn-small memo-btn"
+                          onClick={() => handleDownloadExam(exam.memo_filename)}
+                          title="Download Memorandum"
+                        >
+                          <FileCheck size={14} />
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>

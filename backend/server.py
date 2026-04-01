@@ -2716,10 +2716,20 @@ class ExamGenerationRequest(BaseModel):
     additional_instructions: Optional[str] = None
 
 
-async def generate_exam_sources(topic: str, question_number: int) -> Dict[str, Any]:
+async def generate_exam_sources(topic: str, question_number: int, opportunity: int = 1) -> Dict[str, Any]:
     """Generate legitimate historical sources for a source-based question."""
     
+    variation_instruction = ""
+    if opportunity == 2:
+        variation_instruction = """
+IMPORTANT: This is for a SECOND OPPORTUNITY exam. Generate DIFFERENT sources than would typically be used.
+- Use alternative primary sources from the same period
+- Choose different perspectives or lesser-known documents
+- Include different visual sources (different cartoons, maps, or photographs)
+- Maintain the same academic rigor but with fresh material"""
+    
     prompt = f"""You are a History exam creator. Generate authentic historical sources for a source-based question on: "{topic}"
+{variation_instruction}
 
 Generate 2-3 PRIMARY SOURCES that are historically accurate and legitimate. Include:
 1. A text excerpt (speech, memoir, letter, treaty, newspaper article) with author, date, and context
@@ -2902,10 +2912,20 @@ Respond in JSON format:
         return {"error": str(e)}
 
 
-async def generate_essay_question(topic: str, marks: int = 50) -> Dict[str, Any]:
+async def generate_essay_question(topic: str, marks: int = 50, opportunity: int = 1) -> Dict[str, Any]:
     """Generate an essay question with marking matrix."""
     
+    variation_instruction = ""
+    if opportunity == 2:
+        variation_instruction = """
+IMPORTANT: This is for a SECOND OPPORTUNITY exam. Create a DIFFERENT essay question on the same topic:
+- Use a different angle or perspective on the topic
+- Ask about different aspects (e.g., if first asks about causes, this should ask about consequences)
+- Phrase the question differently while maintaining the same academic rigor
+- The essay matrix/rubric can remain the same"""
+    
     prompt = f"""Create a {marks}-mark essay question for a History exam on the topic: "{topic}"
+{variation_instruction}
 
 The question should:
 1. Be thought-provoking and allow for argumentation
@@ -3018,6 +3038,14 @@ def create_exam_docx(exam_data: Dict[str, Any], output_path: Path) -> Path:
     run = header.add_run(f"{exam_data['module_code']}: {exam_data['module_name']}")
     run.bold = True
     run.font.size = Pt(16)
+    
+    # Add opportunity label if present
+    if exam_data.get('opportunity_label'):
+        opp_para = doc.add_paragraph()
+        opp_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = opp_para.add_run(f"({exam_data['opportunity_label']})")
+        run.bold = True
+        run.font.size = Pt(12)
     
     # Exam details table
     details_table = doc.add_table(rows=4, cols=2)
@@ -3205,6 +3233,14 @@ def create_memorandum_docx(exam_data: Dict[str, Any], output_path: Path) -> Path
     run = header.add_run(f"{exam_data['module_code']}: {exam_data['module_name']}")
     run.bold = True
     run.font.size = Pt(16)
+    
+    # Add opportunity label if present
+    if exam_data.get('opportunity_label'):
+        opp_para = doc.add_paragraph()
+        opp_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = opp_para.add_run(f"({exam_data['opportunity_label']})")
+        run.bold = True
+        run.font.size = Pt(12)
     
     memo_title = doc.add_paragraph()
     memo_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -3426,94 +3462,140 @@ def create_memorandum_docx(exam_data: Dict[str, Any], output_path: Path) -> Path
 
 @app.post("/api/exams/generate")
 async def generate_exam(request: ExamGenerationRequest):
-    """Generate a complete History exam paper with memorandum."""
+    """Generate complete History exam papers (1st and 2nd opportunity) with memorandums."""
     
-    print(f"[Exam Builder] Generating exam for topics: {request.topics}")
+    print(f"[Exam Builder] Generating exam set for topics: {request.topics}")
     
     try:
-        exam_data = {
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results = {
+            "first_opportunity": None,
+            "second_opportunity": None
+        }
+        
+        # Generate both opportunities
+        for opp in [1, 2]:
+            opp_label = "1st" if opp == 1 else "2nd"
+            print(f"[Exam Builder] === Generating {opp_label} Opportunity Exam ===")
+            
+            exam_data = {
+                "module_code": request.module_code,
+                "module_name": request.module_name,
+                "total_marks": request.total_marks,
+                "duration_hours": request.duration_hours,
+                "opportunity": opp,
+                "opportunity_label": f"{opp_label} Opportunity",
+                "source_questions": [],
+                "methodology_question": None,
+                "essay_question": None,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            
+            # Generate source-based questions (2 x 25 marks each = 50 marks)
+            marks_per_source_question = 25
+            for i, topic in enumerate(request.topics[:2]):
+                print(f"[Exam Builder] {opp_label} Opp - Source question {i+1}: {topic}")
+                
+                # Generate sources (different for 2nd opportunity)
+                sources_data = await generate_exam_sources(topic, i + 1, opportunity=opp)
+                sources = sources_data.get('sources', [])
+                
+                # Generate questions
+                questions_data = await generate_source_questions(sources, topic, marks_per_source_question)
+                
+                exam_data["source_questions"].append({
+                    "question_number": i + 1,
+                    "topic": topic,
+                    "sources": sources,
+                    "questions": questions_data.get('questions', []),
+                    "total_marks": marks_per_source_question
+                })
+            
+            # Generate methodology question (25 marks) - same for both opportunities
+            print(f"[Exam Builder] {opp_label} Opp - Methodology: {request.methodology_topic}")
+            exam_data["methodology_question"] = await generate_methodology_question(
+                request.methodology_topic, 
+                marks=25
+            )
+            
+            # Generate essay question (50 marks) - different for 2nd opportunity
+            print(f"[Exam Builder] {opp_label} Opp - Essay: {request.essay_topic}")
+            exam_data["essay_question"] = await generate_essay_question(
+                request.essay_topic,
+                marks=50,
+                opportunity=opp
+            )
+            
+            # Calculate actual total
+            actual_total = sum(sq.get('total_marks', 0) for sq in exam_data['source_questions'])
+            actual_total += exam_data['methodology_question'].get('marks', 0) if exam_data['methodology_question'] else 0
+            actual_total += exam_data['essay_question'].get('marks', 0) if exam_data['essay_question'] else 0
+            exam_data['calculated_total'] = actual_total
+            
+            # Generate DOCX files
+            opp_suffix = "1stOpp" if opp == 1 else "2ndOpp"
+            
+            # Exam paper
+            filename = f"{request.module_code}_Exam_{opp_suffix}_{timestamp}.docx"
+            output_path = OUTPUT_DIR / filename
+            create_exam_docx(exam_data, output_path)
+            exam_data["filename"] = filename
+            
+            # Memorandum
+            memo_filename = f"{request.module_code}_Memo_{opp_suffix}_{timestamp}.docx"
+            memo_path = OUTPUT_DIR / memo_filename
+            create_memorandum_docx(exam_data, memo_path)
+            exam_data["memo_filename"] = memo_filename
+            
+            print(f"[Exam Builder] Generated {opp_label} Opp: {filename}, {memo_filename}")
+            
+            # Store result
+            if opp == 1:
+                results["first_opportunity"] = exam_data
+            else:
+                results["second_opportunity"] = exam_data
+        
+        # Store in database as a single record with both opportunities
+        exam_record = {
             "module_code": request.module_code,
             "module_name": request.module_name,
             "total_marks": request.total_marks,
             "duration_hours": request.duration_hours,
-            "source_questions": [],
-            "methodology_question": None,
-            "essay_question": None,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        # Generate source-based questions (2 x 25 marks each = 50 marks)
-        marks_per_source_question = 25
-        for i, topic in enumerate(request.topics[:2]):  # Max 2 source-based questions
-            print(f"[Exam Builder] Generating source-based question {i+1} for: {topic}")
-            
-            # Generate sources
-            sources_data = await generate_exam_sources(topic, i + 1)
-            sources = sources_data.get('sources', [])
-            
-            # Generate questions
-            questions_data = await generate_source_questions(sources, topic, marks_per_source_question)
-            
-            exam_data["source_questions"].append({
-                "question_number": i + 1,
-                "topic": topic,
-                "sources": sources,
-                "questions": questions_data.get('questions', []),
-                "total_marks": marks_per_source_question
-            })
-        
-        # Generate methodology question (25 marks)
-        print(f"[Exam Builder] Generating methodology question for: {request.methodology_topic}")
-        exam_data["methodology_question"] = await generate_methodology_question(
-            request.methodology_topic, 
-            marks=25
-        )
-        
-        # Generate essay question (50 marks)
-        print(f"[Exam Builder] Generating essay question for: {request.essay_topic}")
-        exam_data["essay_question"] = await generate_essay_question(
-            request.essay_topic,
-            marks=50
-        )
-        
-        # Calculate actual total
-        actual_total = sum(sq.get('total_marks', 0) for sq in exam_data['source_questions'])
-        actual_total += exam_data['methodology_question'].get('marks', 0) if exam_data['methodology_question'] else 0
-        actual_total += exam_data['essay_question'].get('marks', 0) if exam_data['essay_question'] else 0
-        exam_data['calculated_total'] = actual_total
-        
-        # Generate DOCX exam paper
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{request.module_code}_Exam_{timestamp}.docx"
-        output_path = OUTPUT_DIR / filename
-        
-        create_exam_docx(exam_data, output_path)
-        
-        # Generate Memorandum DOCX
-        memo_filename = f"{request.module_code}_Memorandum_{timestamp}.docx"
-        memo_path = OUTPUT_DIR / memo_filename
-        
-        create_memorandum_docx(exam_data, memo_path)
-        print(f"[Exam Builder] Generated memorandum: {memo_filename}")
-        
-        # Store in database
-        exam_record = {
-            **exam_data,
-            "filename": filename,
-            "file_path": str(output_path),
-            "memo_filename": memo_filename,
-            "memo_path": str(memo_path)
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "first_opportunity": results["first_opportunity"],
+            "second_opportunity": results["second_opportunity"],
+            # Legacy fields for backwards compatibility
+            "filename": results["first_opportunity"]["filename"],
+            "memo_filename": results["first_opportunity"]["memo_filename"],
+            "calculated_total": results["first_opportunity"]["calculated_total"]
         }
         result = db["exams"].insert_one(exam_record)
-        exam_data["_id"] = str(result.inserted_id)
-        exam_data["filename"] = filename
-        exam_data["memo_filename"] = memo_filename
         
         return {
             "success": True,
-            "exam": exam_data,
-            "download_url": f"/api/exams/download/{filename}",
-            "memo_download_url": f"/api/exams/download/{memo_filename}"
+            "exam": {
+                "_id": str(result.inserted_id),
+                "module_code": request.module_code,
+                "module_name": request.module_name,
+                "total_marks": request.total_marks,
+                "calculated_total": results["first_opportunity"]["calculated_total"],
+                "duration_hours": request.duration_hours,
+                "created_at": exam_record["created_at"],
+                "first_opportunity": {
+                    "filename": results["first_opportunity"]["filename"],
+                    "memo_filename": results["first_opportunity"]["memo_filename"],
+                    "source_questions": results["first_opportunity"]["source_questions"],
+                    "methodology_question": results["first_opportunity"]["methodology_question"],
+                    "essay_question": results["first_opportunity"]["essay_question"]
+                },
+                "second_opportunity": {
+                    "filename": results["second_opportunity"]["filename"],
+                    "memo_filename": results["second_opportunity"]["memo_filename"],
+                    "source_questions": results["second_opportunity"]["source_questions"],
+                    "methodology_question": results["second_opportunity"]["methodology_question"],
+                    "essay_question": results["second_opportunity"]["essay_question"]
+                }
+            }
         }
         
     except Exception as e:

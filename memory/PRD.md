@@ -41,23 +41,26 @@ Frontend (React)         Backend (FastAPI)          Database (MongoDB)
 ## What's Been Implemented
 
 ### Exam Builder Feature (April 1, 2026) ✅ NEW
+- [x] **Dual exam generation** - Generates both 1st and 2nd Opportunity exams simultaneously
 - [x] **Exam generation endpoint** (`POST /api/exams/generate`)
-- [x] **Source-based questions** - AI generates legitimate historical sources (speeches, cartoons, photographs, documents)
-- [x] **Methodology question** - Lesson planning task for trainee teachers with marking rubric
-- [x] **Essay question** - With full essay assessment matrix (5 criteria, 50 marks)
-- [x] **DOCX generation** - Professionally formatted exam paper
+- [x] **Source-based questions** - AI generates DIFFERENT historical sources for each opportunity
+- [x] **Methodology question** - Lesson planning task (same for both opportunities)
+- [x] **Essay question** - DIFFERENT questions per opportunity (same topic, different angle)
+- [x] **DOCX generation** - Professionally formatted exam paper with opportunity label in header
 - [x] **Memorandum generation** - Complete marking guide with:
   - Expected answer points for each question
   - Cognitive levels indicated
   - Full methodology marking rubric
   - Complete essay assessment matrix with mark ranges
   - Score calculation table for easy marking
-- [x] **Exam listing** (`GET /api/exams`)
-- [x] **Exam/Memo download** (`GET /api/exams/download/{filename}`)
-- [x] **Frontend UI** - Full form with topic inputs, suggestion chips, validation
-- [x] **Dual download buttons** - Separate buttons for Exam Paper and Memorandum
-- [x] **Recent Exams list** - Shows both exam and memo download options
-- [x] **MongoDB persistence** - Exams stored in `exams` collection
+- [x] **4 files per generation**:
+  - 1st Opportunity Exam (green download)
+  - 1st Opportunity Memo (orange download)
+  - 2nd Opportunity Exam (blue download)
+  - 2nd Opportunity Memo (purple download)
+- [x] **Frontend UI** - Full form with topic inputs, dual download buttons per opportunity
+- [x] **Recent Exam Sets** - Shows all 4 downloads (1st + 2nd opportunity)
+- [x] **MongoDB persistence** - Exams stored with both opportunities in `exams` collection
 
 ### Backend Features (Original)
 - [x] Health check endpoint

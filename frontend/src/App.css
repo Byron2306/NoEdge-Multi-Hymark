@@ -2218,11 +2218,47 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+.exam-set-container {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.5rem;
+}
+
+@media (max-width: 1024px) {
+  .exam-set-container {
+    grid-template-columns: 1fr;
+  }
+}
+
 .exam-preview-card {
   background: rgba(20, 34, 56, 0.8);
   border: 1px solid #1e3a5f;
   border-radius: 12px;
   overflow: hidden;
+}
+
+.exam-preview-card.opportunity-card {
+  position: relative;
+}
+
+.opportunity-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 0.4rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 0 12px 0 12px;
+}
+
+.opportunity-badge.first-opp {
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  color: white;
+}
+
+.opportunity-badge.second-opp {
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  color: white;
 }
 
 .exam-preview-header {
@@ -2287,6 +2323,44 @@
 
 .download-memo-btn:hover {
   transform: scale(1.05);
+}
+
+.download-exam-btn.second {
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+}
+
+.download-memo-btn.second {
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+}
+
+/* Compact exam sections preview */
+.exam-sections-preview.compact {
+  padding: 1rem;
+}
+
+.exam-section-mini {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  color: #8fa3b8;
+  font-size: 0.85rem;
+  border-bottom: 1px dashed rgba(30, 58, 95, 0.5);
+}
+
+.exam-section-mini:last-child {
+  border-bottom: none;
+}
+
+.section-label {
+  font-weight: 600;
+  color: #e85d04;
+  min-width: 30px;
+}
+
+.source-count-mini {
+  margin-left: auto;
+  color: #5a7a9a;
+  font-size: 0.75rem;
 }
 
 .exam-sections-preview {
@@ -2420,6 +2494,50 @@
 .recent-exam-actions {
   display: flex;
   gap: 0.5rem;
+}
+
+.recent-exam-downloads {
+  display: flex;
+  gap: 1rem;
+}
+
+.opp-download-group {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.opp-label {
+  color: #5a7a9a;
+  font-size: 0.75rem;
+  font-weight: 600;
+  min-width: 28px;
+}
+
+.download-btn-small.second {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: #3b82f6;
+}
+
+.download-btn-small.second:hover {
+  background: rgba(59, 130, 246, 0.4);
+  color: #fff;
+}
+
+.download-btn-small.memo-btn.second {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.3);
+  color: #6366f1;
+}
+
+.download-btn-small.memo-btn.second:hover {
+  background: rgba(99, 102, 241, 0.4);
+  color: #fff;
+}
+
+.recent-exam-card.expanded {
+  flex-wrap: wrap;
 }
 
 /* Spin animation */
