@@ -11,10 +11,13 @@ Fix and enhance the assessor app to be AI-powered, highly flexible for any assig
 - Fill out rubrics and save feedback in same folder structure
 - Record marks in CSV grades file
 
+**NEW REQUIREMENT (April 2026):** Build an Exam Builder feature to generate complete History exam papers.
+
 ## User Personas
 1. **University Lecturer/Marker** - Needs to efficiently grade large batches of essays with consistent, fair assessment
 2. **Teaching Assistant** - Assists with grading workload, needs clear rubric guidance
 3. **Course Administrator** - Manages bulk submissions via eFundi, needs streamlined upload/download
+4. **Exam Creator** - Needs to generate high-quality exam papers with legitimate historical sources
 
 ## Core Requirements (Static)
 - AI-powered essay assessment using GPT-4o
@@ -24,18 +27,32 @@ Fix and enhance the assessor app to be AI-powered, highly flexible for any assig
 - eFundi ZIP bulk processing
 - CSV grade file updates
 - Default essay rubric creation
+- **Exam Builder for generating 125-mark History papers**
 
 ## Architecture
 ```
 Frontend (React)         Backend (FastAPI)          Database (MongoDB)
 ├── Assess Tab    <-->   /api/assess/*       <-->   assessments_collection
+├── Exam Builder  <-->   /api/exams/*        <-->   exams_collection
 ├── Rubrics Tab   <-->   /api/rubric/*       <-->   rubrics_collection
 └── Jobs Tab      <-->   /api/job/*          <-->   jobs_collection
 ```
 
-## What's Been Implemented (March 3, 2026)
+## What's Been Implemented
 
-### Backend Features
+### Exam Builder Feature (April 1, 2026) ✅ NEW
+- [x] **Exam generation endpoint** (`POST /api/exams/generate`)
+- [x] **Source-based questions** - AI generates legitimate historical sources (speeches, cartoons, photographs, documents)
+- [x] **Methodology question** - Lesson planning task for trainee teachers with marking rubric
+- [x] **Essay question** - With full essay assessment matrix (5 criteria, 50 marks)
+- [x] **DOCX generation** - Professionally formatted exam paper
+- [x] **Exam listing** (`GET /api/exams`)
+- [x] **Exam download** (`GET /api/exams/download/{filename}`)
+- [x] **Frontend UI** - Full form with topic inputs, suggestion chips, validation
+- [x] **Recent Exams list** - Shows previously generated exams
+- [x] **MongoDB persistence** - Exams stored in `exams` collection
+
+### Backend Features (Original)
 - [x] Health check endpoint
 - [x] Rubric upload and parsing (DOCX/PDF)
 - [x] AI-powered rubric extraction using GPT
@@ -53,7 +70,7 @@ Frontend (React)         Backend (FastAPI)          Database (MongoDB)
 - [x] **Balanced grading prompt** - ~65% average with meaningful variation (36%-80% range)
 
 ### Frontend Features
-- [x] Three-tab interface (Assess, Rubrics, Jobs)
+- [x] Four-tab interface (Assess, **Exam Builder**, Rubrics, Jobs)
 - [x] File upload dropzones
 - [x] Rubric selection cards
 - [x] Bulk eFundi ZIP assessment
@@ -67,7 +84,7 @@ Frontend (React)         Backend (FastAPI)          Database (MongoDB)
 - [x] **Expandable Rubric Criteria** - Click criteria to see level descriptions and score ranges
 - [x] **Live Progress Monitoring** - Real-time progress overlay during bulk assessment
 
-### Backend Features (New - March 10, 2026)
+### Backend Features (March 10, 2026)
 - [x] **PDF Annotation Support** - Using PyMuPDF for highlights, sticky notes, score box
 - [x] **Live Job Progress** - Real-time updates to database during processing
 - [x] **Assignment Instructions** - Upload or paste task instructions for AI context
@@ -83,6 +100,7 @@ Frontend (React)         Backend (FastAPI)          Database (MongoDB)
 
 ### AI Integration
 - [x] GPT-4o for essay assessment
+- [x] GPT-4o for exam generation (sources, questions, methodology, essay)
 - [x] Criterion-by-criterion scoring
 - [x] Strengths and areas for improvement
 - [x] Inline annotations with quotes
@@ -104,26 +122,30 @@ Frontend (React)         Backend (FastAPI)          Database (MongoDB)
 | /api/assessments | GET | List assessments |
 | /api/assessment/{id} | GET | Get assessment details |
 | /api/assessment/{id}/download | GET | Download annotated document |
+| **/api/exams/generate** | **POST** | **Generate new exam paper** |
+| **/api/exams** | **GET** | **List all generated exams** |
+| **/api/exams/download/{filename}** | **GET** | **Download exam DOCX** |
 
 ## Prioritized Backlog
 
-### P0 (Critical)
+### P0 (Critical) - COMPLETED
 - [x] Core AI assessment functionality
 - [x] Rubric parsing and management
 - [x] Document annotation
-- [x] **FIXED: eFundi bulk processing output format** - Grades in CSV, feedback in correct folders, same filenames
+- [x] eFundi bulk processing output format
+- [x] **Exam Builder feature**
 
 ### P1 (High Priority)
-- [ ] PDF annotation support (currently only DOCX)
-- [ ] Real-time progress updates for bulk jobs
-- [ ] Email notifications on job completion
-- [ ] Support for multiple rubric formats
+- [ ] Fix Essay Matrix rubric parsing bug (user-reported issue)
+- [ ] Background task stability (jobs die on server restart)
+- [ ] Upload to eFundi functionality
 
 ### P2 (Medium Priority)
+- [ ] eFundi automation (Playwright - currently broken)
+- [ ] OCR support for image-based submissions
 - [ ] Plagiarism detection integration
 - [ ] Historical grade analytics
 - [ ] Rubric editor UI
-- [ ] Student feedback portal
 
 ### P3 (Nice to Have)
 - [ ] Multi-language support
@@ -132,14 +154,14 @@ Frontend (React)         Backend (FastAPI)          Database (MongoDB)
 - [ ] Mobile app
 
 ## Next Tasks
-1. Add PDF annotation support using PyMuPDF
-2. Implement webhook callback for eFundi integration
-3. Add progress streaming via WebSocket
-4. Create rubric template library
+1. Fix Essay Matrix rubric parsing for complex table structures
+2. Implement Upload to eFundi feature
+3. Add background task recovery mechanism
+4. Fix eFundi automation (Playwright script)
 
 ## Tech Stack
 - Frontend: React 18, Tailwind CSS, Lucide Icons
 - Backend: FastAPI, Python 3.x
 - Database: MongoDB
 - AI: OpenAI GPT-4o
-- Document Processing: python-docx, PyPDF2
+- Document Processing: python-docx, PyMuPDF, PyPDF2
