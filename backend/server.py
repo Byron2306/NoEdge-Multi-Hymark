@@ -1964,22 +1964,45 @@ async def get_job_logs(job_id: str):
 @app.get("/api/jobs")
 async def list_jobs():
     """List all assessment jobs."""
-    jobs = list(jobs_collection.find({}, {"_id": 0}).sort("created_at", -1).limit(50))
+    jobs = list(jobs_collection.find().sort("created_at", -1).limit(50))
+    for job in jobs:
+        job["_id"] = str(job["_id"])
+        if not job.get("job_id"):
+            job["job_id"] = job["_id"]
     return {"jobs": jobs}
 
 
 @app.get("/api/download/{job_id}")
 async def download_results(job_id: str):
     """Download the processed eFundi zip for a job."""
+    print(f"[Download] Looking for job_id: {job_id}")
+    
+    # Try to find by job_id field first, then by _id
     job = jobs_collection.find_one({"job_id": job_id})
+    print(f"[Download] Find by job_id: {job is not None}")
+    
     if not job:
+        try:
+            job = jobs_collection.find_one({"_id": ObjectId(job_id)})
+            print(f"[Download] Find by _id: {job is not None}")
+        except Exception as e:
+            print(f"[Download] ObjectId error: {e}")
+    
+    if not job:
+        # Debug: list all jobs
+        all_jobs = list(jobs_collection.find())
+        print(f"[Download] Total jobs in DB: {len(all_jobs)}")
+        for j in all_jobs:
+            print(f"[Download]   job_id={j.get('job_id')}, _id={j.get('_id')}")
         raise HTTPException(status_code=404, detail="Job not found")
     
     if job.get("status") != "completed":
         raise HTTPException(status_code=400, detail="Job not completed yet")
     
+    # Check both locations for output_zip_path
     results = job.get("results", {})
-    zip_path = results.get("output_zip_path")
+    zip_path = results.get("output_zip_path") or job.get("output_zip_path")
+    print(f"[Download] zip_path: {zip_path}")
     
     if not zip_path or not Path(zip_path).exists():
         raise HTTPException(status_code=404, detail="Output file not found")
