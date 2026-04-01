@@ -19,7 +19,12 @@ import {
   Link,
   Lock,
   Globe,
-  Play
+  Play,
+  PenTool,
+  Plus,
+  Trash2,
+  FileCheck,
+  Loader
 } from 'lucide-react';
 import './App.css';
 
@@ -773,6 +778,405 @@ function JobCard({ job, onDownload, onUploadToEfundi, onViewDetails }) {
   );
 }
 
+// Exam Builder Tab Component
+function ExamBuilderTab({ showToast }) {
+  const [moduleCode, setModuleCode] = useState('HISE411');
+  const [moduleName, setModuleName] = useState('HISTORY SNR & FET 4A');
+  const [sourceTopics, setSourceTopics] = useState(['', '']);
+  const [methodologyTopic, setMethodologyTopic] = useState('');
+  const [essayTopic, setEssayTopic] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedExam, setGeneratedExam] = useState(null);
+  const [generationProgress, setGenerationProgress] = useState('');
+  const [recentExams, setRecentExams] = useState([]);
+
+  // Load recent exams
+  useEffect(() => {
+    const loadExams = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/exams`);
+        if (res.ok) {
+          const data = await res.json();
+          setRecentExams(data.exams || []);
+        }
+      } catch (error) {
+        console.error('Failed to load exams:', error);
+      }
+    };
+    loadExams();
+  }, [generatedExam]);
+
+  const handleSourceTopicChange = (index, value) => {
+    const newTopics = [...sourceTopics];
+    newTopics[index] = value;
+    setSourceTopics(newTopics);
+  };
+
+  const handleGenerateExam = async () => {
+    // Validation
+    if (!sourceTopics[0] || !sourceTopics[1]) {
+      showToast('Please enter both source-based question topics', 'error');
+      return;
+    }
+    if (!methodologyTopic) {
+      showToast('Please enter a methodology question topic', 'error');
+      return;
+    }
+    if (!essayTopic) {
+      showToast('Please enter an essay question topic', 'error');
+      return;
+    }
+
+    setIsGenerating(true);
+    setGenerationProgress('Starting exam generation...');
+    setGeneratedExam(null);
+
+    try {
+      setGenerationProgress('Generating source-based questions with historical sources...');
+      
+      const response = await fetch(`${API_URL}/api/exams/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          module_code: moduleCode,
+          module_name: moduleName,
+          topics: sourceTopics.filter(t => t.trim()),
+          methodology_topic: methodologyTopic,
+          essay_topic: essayTopic,
+          total_marks: 125,
+          duration_hours: 3
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'Failed to generate exam');
+      }
+
+      const data = await response.json();
+      setGeneratedExam(data.exam);
+      setGenerationProgress('');
+      showToast('Exam generated successfully!', 'success');
+
+    } catch (error) {
+      console.error('Exam generation error:', error);
+      showToast(`Generation failed: ${error.message}`, 'error');
+      setGenerationProgress('');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleDownloadExam = (filename) => {
+    window.open(`${API_URL}/api/exams/download/${filename}`, '_blank');
+  };
+
+  // Predefined topic suggestions
+  const topicSuggestions = {
+    source: [
+      'The Cuban Missile Crisis (1962)',
+      'The Division of Germany (1945-1949)',
+      'The Korean War (1950-1953)',
+      'The Berlin Wall and Its Fall',
+      'The Vietnam War and Media',
+      'The Cold War Origins',
+      'Apartheid in South Africa',
+      'The Civil Rights Movement',
+      'World War II: The Holocaust',
+      'Decolonization in Africa'
+    ],
+    methodology: [
+      'The Berlin Airlift',
+      'The Cuban Missile Crisis',
+      'The Civil Rights Movement',
+      'Apartheid Resistance',
+      'World War I Causes',
+      'The French Revolution'
+    ],
+    essay: [
+      'The role of media in shaping public opinion during the Vietnam War',
+      'Evaluate Gorbachev\'s role in the collapse of the Soviet Union',
+      'The impact of the Cold War on global politics',
+      'Assess the effectiveness of passive resistance in achieving political change',
+      'The causes and consequences of World War I',
+      'The legacy of colonialism in Africa'
+    ]
+  };
+
+  return (
+    <div className="tab-content" data-testid="exam-builder-tab">
+      <section className="section">
+        <h2 className="section-title">
+          <PenTool size={22} />
+          History Exam Builder
+        </h2>
+        <p className="section-description">
+          Generate a complete 125-mark History exam paper with source-based questions, methodology, and essay sections.
+          The AI will source legitimate historical materials and create academically rigorous questions.
+        </p>
+
+        <div className="exam-builder-form">
+          {/* Module Info */}
+          <div className="form-section">
+            <h3 className="form-section-title">Module Information</h3>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Module Code</label>
+                <input
+                  type="text"
+                  value={moduleCode}
+                  onChange={(e) => setModuleCode(e.target.value)}
+                  placeholder="e.g., HISE411"
+                  className="form-input"
+                  data-testid="module-code"
+                />
+              </div>
+              <div className="form-group">
+                <label>Module Name</label>
+                <input
+                  type="text"
+                  value={moduleName}
+                  onChange={(e) => setModuleName(e.target.value)}
+                  placeholder="e.g., HISTORY SNR & FET 4A"
+                  className="form-input"
+                  data-testid="module-name"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Source-Based Questions (2 x 25 marks) */}
+          <div className="form-section">
+            <h3 className="form-section-title">
+              <FileText size={18} />
+              Section 1: Source-Based Questions (2 × 25 marks = 50 marks)
+            </h3>
+            <p className="form-hint">
+              Enter two topics. The AI will generate historical sources (speeches, cartoons, documents) and questions for each.
+            </p>
+            
+            {sourceTopics.map((topic, index) => (
+              <div key={index} className="topic-input-group">
+                <label>Question {index + 1} Topic</label>
+                <input
+                  type="text"
+                  value={topic}
+                  onChange={(e) => handleSourceTopicChange(index, e.target.value)}
+                  placeholder={`e.g., ${topicSuggestions.source[index]}`}
+                  className="form-input"
+                  data-testid={`source-topic-${index + 1}`}
+                />
+                <div className="topic-suggestions">
+                  <span className="suggestions-label">Suggestions:</span>
+                  {topicSuggestions.source.slice(0, 5).map((s, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      className="suggestion-chip"
+                      onClick={() => handleSourceTopicChange(index, s)}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Methodology Question (25 marks) */}
+          <div className="form-section">
+            <h3 className="form-section-title">
+              <Target size={18} />
+              Section 2: Methodology Question (25 marks)
+            </h3>
+            <p className="form-hint">
+              A lesson planning question for trainee teachers. Students will create a teaching resource.
+            </p>
+            
+            <div className="topic-input-group">
+              <label>Methodology Topic</label>
+              <input
+                type="text"
+                value={methodologyTopic}
+                onChange={(e) => setMethodologyTopic(e.target.value)}
+                placeholder={`e.g., ${topicSuggestions.methodology[0]}`}
+                className="form-input"
+                data-testid="methodology-topic"
+              />
+              <div className="topic-suggestions">
+                <span className="suggestions-label">Suggestions:</span>
+                {topicSuggestions.methodology.map((s, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="suggestion-chip"
+                    onClick={() => setMethodologyTopic(s)}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Essay Question (50 marks) */}
+          <div className="form-section">
+            <h3 className="form-section-title">
+              <BookOpen size={18} />
+              Section 3: Essay Question (50 marks)
+            </h3>
+            <p className="form-hint">
+              A comprehensive essay question with an assessment matrix. The AI will generate the question and marking rubric.
+            </p>
+            
+            <div className="topic-input-group">
+              <label>Essay Topic</label>
+              <input
+                type="text"
+                value={essayTopic}
+                onChange={(e) => setEssayTopic(e.target.value)}
+                placeholder={`e.g., ${topicSuggestions.essay[0]}`}
+                className="form-input"
+                data-testid="essay-topic"
+              />
+              <div className="topic-suggestions">
+                <span className="suggestions-label">Suggestions:</span>
+                {topicSuggestions.essay.slice(0, 4).map((s, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="suggestion-chip"
+                    onClick={() => setEssayTopic(s)}
+                  >
+                    {s.substring(0, 50)}...
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Generate Button */}
+          <div className="generate-section">
+            <button
+              className="generate-btn"
+              onClick={handleGenerateExam}
+              disabled={isGenerating}
+              data-testid="generate-exam-btn"
+            >
+              {isGenerating ? (
+                <>
+                  <Loader size={20} className="spin" />
+                  Generating Exam...
+                </>
+              ) : (
+                <>
+                  <Zap size={20} />
+                  Generate 125-Mark Exam Paper
+                </>
+              )}
+            </button>
+            
+            {generationProgress && (
+              <div className="generation-progress">
+                <Loader size={16} className="spin" />
+                <span>{generationProgress}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* Generated Exam Preview */}
+      {generatedExam && (
+        <section className="section exam-preview-section">
+          <h2 className="section-title">
+            <FileCheck size={22} />
+            Generated Exam
+          </h2>
+          
+          <div className="exam-preview-card">
+            <div className="exam-preview-header">
+              <div>
+                <h3>{generatedExam.module_code}: {generatedExam.module_name}</h3>
+                <p>Total: {generatedExam.calculated_total || generatedExam.total_marks} marks | Duration: {generatedExam.duration_hours} hours</p>
+              </div>
+              <button
+                className="download-exam-btn"
+                onClick={() => handleDownloadExam(generatedExam.filename)}
+                data-testid="download-generated-exam"
+              >
+                <Download size={18} />
+                Download DOCX
+              </button>
+            </div>
+
+            <div className="exam-sections-preview">
+              {/* Source Questions */}
+              {generatedExam.source_questions?.map((sq, i) => (
+                <div key={i} className="exam-section-preview">
+                  <h4>Question {i + 1}: {sq.topic} ({sq.total_marks} marks)</h4>
+                  <p className="source-count">{sq.sources?.length || 0} historical sources, {sq.questions?.length || 0} questions</p>
+                  <div className="sources-list">
+                    {sq.sources?.map((source, j) => (
+                      <span key={j} className="source-tag">
+                        {source.label}: {source.type}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+
+              {/* Methodology */}
+              {generatedExam.methodology_question && (
+                <div className="exam-section-preview">
+                  <h4>Question {(generatedExam.source_questions?.length || 0) + 1}: Methodology ({generatedExam.methodology_question.marks} marks)</h4>
+                  <p>{generatedExam.methodology_question.topic}</p>
+                </div>
+              )}
+
+              {/* Essay */}
+              {generatedExam.essay_question && (
+                <div className="exam-section-preview">
+                  <h4>Question {(generatedExam.source_questions?.length || 0) + 2}: Essay ({generatedExam.essay_question.marks} marks)</h4>
+                  <p>{generatedExam.essay_question.topic}</p>
+                  <p className="essay-preview">{generatedExam.essay_question.question?.substring(0, 150)}...</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Recent Exams */}
+      {recentExams.length > 0 && (
+        <section className="section">
+          <h2 className="section-title">
+            <Clock size={22} />
+            Recent Exams
+          </h2>
+          <div className="recent-exams-list">
+            {recentExams.slice(0, 5).map((exam, i) => (
+              <div key={exam._id || i} className="recent-exam-card">
+                <div className="recent-exam-info">
+                  <span className="exam-code">{exam.module_code}</span>
+                  <span className="exam-date">{new Date(exam.created_at).toLocaleDateString()}</span>
+                  <span className="exam-marks">{exam.calculated_total || exam.total_marks} marks</span>
+                </div>
+                <button
+                  className="download-btn-small"
+                  onClick={() => handleDownloadExam(exam.filename)}
+                >
+                  <Download size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 // Main App
 function App() {
   const [activeTab, setActiveTab] = useState('assess');
@@ -1129,6 +1533,14 @@ function App() {
           Assess
         </button>
         <button 
+          className={`nav-btn ${activeTab === 'exam-builder' ? 'nav-btn-active' : ''}`}
+          onClick={() => setActiveTab('exam-builder')}
+          data-testid="nav-exam-builder"
+        >
+          <PenTool size={18} />
+          Exam Builder
+        </button>
+        <button 
           className={`nav-btn ${activeTab === 'rubrics' ? 'nav-btn-active' : ''}`}
           onClick={() => setActiveTab('rubrics')}
           data-testid="nav-rubrics"
@@ -1391,6 +1803,11 @@ Part C: Reflect on how your improvements enhance historical thinking skills"
               </section>
             )}
           </div>
+        )}
+
+        {/* Exam Builder Tab */}
+        {activeTab === 'exam-builder' && (
+          <ExamBuilderTab showToast={showToast} />
         )}
 
         {/* Rubrics Tab */}

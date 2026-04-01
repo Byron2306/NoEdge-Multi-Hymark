@@ -2697,6 +2697,602 @@ async def efundi_upload_results(job_id: str, background_tasks: BackgroundTasks):
     }
 
 
+# ===================== EXAM BUILDER =====================
+
+class ExamTopic(BaseModel):
+    topic: str
+    time_period: Optional[str] = None
+    key_events: Optional[List[str]] = None
+    key_figures: Optional[List[str]] = None
+
+class ExamGenerationRequest(BaseModel):
+    module_code: str = "HISE411"
+    module_name: str = "HISTORY SNR & FET 4A"
+    topics: List[str]  # Topics for source-based questions
+    essay_topic: str   # Topic for the essay question
+    methodology_topic: str  # Topic for methodology question
+    total_marks: int = 125
+    duration_hours: int = 3
+    additional_instructions: Optional[str] = None
+
+
+async def generate_exam_sources(topic: str, question_number: int) -> Dict[str, Any]:
+    """Generate legitimate historical sources for a source-based question."""
+    
+    prompt = f"""You are a History exam creator. Generate authentic historical sources for a source-based question on: "{topic}"
+
+Generate 2-3 PRIMARY SOURCES that are historically accurate and legitimate. Include:
+1. A text excerpt (speech, memoir, letter, treaty, newspaper article) with author, date, and context
+2. A visual source description (political cartoon, photograph, map, or propaganda poster) with date and origin
+3. Optionally, a secondary source (historian's analysis) with author and publication
+
+For each source, provide:
+- Source label (Source A, Source B, etc.)
+- Type (Speech/Cartoon/Map/Memoir/etc.)
+- Author or origin
+- Date
+- Full text or detailed description
+- Historical context
+
+IMPORTANT: Use REAL historical figures, events, and approximate historical content. The sources should be educationally accurate.
+
+Respond in JSON format:
+{{
+    "topic": "{topic}",
+    "sources": [
+        {{
+            "label": "Source A",
+            "type": "Political Cartoon",
+            "title": "The Iron Curtain Descends",
+            "author": "David Low",
+            "date": "March 1946",
+            "publication": "Evening Standard",
+            "content": "Description of the cartoon showing Churchill's Iron Curtain speech...",
+            "context": "Published shortly after Churchill's famous Fulton speech..."
+        }}
+    ]
+}}"""
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a History education expert who creates authentic, academically rigorous exam materials using real historical sources."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=3000,
+            response_format={"type": "json_object"}
+        )
+        
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"[Exam Source Generation Error] {e}")
+        return {"topic": topic, "sources": [], "error": str(e)}
+
+
+async def generate_source_questions(sources: List[Dict], topic: str, total_marks: int = 25) -> List[Dict]:
+    """Generate questions based on the provided sources."""
+    
+    sources_text = "\n\n".join([
+        f"{s['label']}: {s['type']} - {s.get('title', '')} by {s.get('author', 'Unknown')} ({s.get('date', '')})\n{s.get('content', '')}"
+        for s in sources
+    ])
+    
+    prompt = f"""Create source-based questions for a History exam on "{topic}".
+
+SOURCES PROVIDED:
+{sources_text}
+
+Create questions totaling {total_marks} marks using these cognitive levels:
+- LEVEL 1 (1-2 marks): Extraction/identification questions
+- LEVEL 2 (3-4 marks): Explanation/interpretation questions  
+- LEVEL 3 (5-6 marks): Analysis/evaluation questions
+- LEVEL 4 (6-8 marks): Synthesis/comparison questions
+
+Include questions that:
+1. Ask students to identify/extract information from sources (2-3 questions)
+2. Ask students to explain concepts or motivations (2-3 questions)
+3. Ask students to analyze bias, reliability, or perspective (1-2 questions)
+4. Ask students to use multiple sources together (1 question)
+
+Respond in JSON format:
+{{
+    "questions": [
+        {{
+            "number": "1.1",
+            "source_reference": "Source A",
+            "question": "What does the cartoonist suggest about...",
+            "marks": 2,
+            "cognitive_level": 1,
+            "expected_answer_points": ["Point 1", "Point 2"]
+        }}
+    ],
+    "total_marks": {total_marks}
+}}"""
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a History exam question writer. Create clear, academically appropriate questions that test historical thinking skills."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.6,
+            max_tokens=2500,
+            response_format={"type": "json_object"}
+        )
+        
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"[Question Generation Error] {e}")
+        return {"questions": [], "error": str(e)}
+
+
+async def generate_methodology_question(topic: str, marks: int = 25) -> Dict[str, Any]:
+    """Generate a methodology question for trainee teachers."""
+    
+    prompt = f"""Create a methodology question for History education students (B.Ed.) on the topic: "{topic}"
+
+The question should ask students to create a lesson plan or teaching resource. Include:
+1. A clear task description
+2. Required components (lesson steps, resources, aims, historical skills, classroom management)
+3. A marking rubric with clear criteria
+
+This tests pedagogical skills, not just historical knowledge.
+
+Respond in JSON format:
+{{
+    "question_number": "3",
+    "title": "Methodology Question",
+    "topic": "{topic}",
+    "task": "Use the topic on {topic} to construct a lesson plan strategy...",
+    "requirements": [
+        "Lesson steps for teacher and learner",
+        "Resources to be used",
+        "Aim of lesson",
+        "Historical skills integration",
+        "Classroom management strategies"
+    ],
+    "marks": {marks},
+    "rubric": {{
+        "Lesson Steps": {{
+            "3 marks": "Clear, detailed steps with logical progression",
+            "2 marks": "Adequate steps but lacks detail",
+            "1 mark": "Minimal or unclear steps"
+        }},
+        "Resources": {{
+            "3 marks": "Varied, appropriate resources identified",
+            "2 marks": "Some resources mentioned",
+            "1 mark": "Limited resource identification"
+        }},
+        "Aim & Outcomes": {{
+            "3 marks": "Clear, measurable learning outcomes",
+            "2 marks": "Outcomes present but vague",
+            "1 mark": "Unclear or missing outcomes"
+        }},
+        "Historical Skills": {{
+            "3 marks": "Multiple skills integrated effectively",
+            "2 marks": "Some skills mentioned",
+            "1 mark": "Limited skill integration"
+        }},
+        "Classroom Management": {{
+            "3 marks": "Detailed strategies for diverse learners",
+            "2 marks": "Basic management strategies",
+            "1 mark": "Minimal consideration"
+        }}
+    }}
+}}"""
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are an education expert creating assessment materials for trainee History teachers."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.6,
+            max_tokens=2000,
+            response_format={"type": "json_object"}
+        )
+        
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"[Methodology Question Error] {e}")
+        return {"error": str(e)}
+
+
+async def generate_essay_question(topic: str, marks: int = 50) -> Dict[str, Any]:
+    """Generate an essay question with marking matrix."""
+    
+    prompt = f"""Create a {marks}-mark essay question for a History exam on the topic: "{topic}"
+
+The question should:
+1. Be thought-provoking and allow for argumentation
+2. Require analysis of causes, consequences, or significance
+3. Allow students to demonstrate in-depth historical knowledge
+
+Also create an essay matrix/rubric with these criteria:
+- Content & Knowledge (15 marks)
+- Analysis & Argumentation (15 marks)
+- Use of Evidence (10 marks)
+- Structure & Coherence (5 marks)
+- Language & Expression (5 marks)
+
+Respond in JSON format:
+{{
+    "question_number": "4",
+    "title": "Essay Question",
+    "topic": "{topic}",
+    "question": "Evaluate the extent to which...",
+    "context": "Brief contextual statement to set up the question",
+    "marks": {marks},
+    "matrix": {{
+        "Content & Knowledge": {{
+            "weight": 15,
+            "levels": {{
+                "Excellent (13-15)": "Comprehensive knowledge, accurate facts, nuanced understanding",
+                "Good (10-12)": "Good knowledge with minor gaps",
+                "Satisfactory (7-9)": "Basic knowledge, some inaccuracies",
+                "Needs Work (0-6)": "Limited knowledge, significant gaps"
+            }}
+        }},
+        "Analysis & Argumentation": {{
+            "weight": 15,
+            "levels": {{
+                "Excellent (13-15)": "Sophisticated analysis, clear thesis, well-reasoned arguments",
+                "Good (10-12)": "Good analysis with clear argument",
+                "Satisfactory (7-9)": "Some analysis but superficial",
+                "Needs Work (0-6)": "Descriptive rather than analytical"
+            }}
+        }},
+        "Use of Evidence": {{
+            "weight": 10,
+            "levels": {{
+                "Excellent (9-10)": "Excellent use of relevant evidence",
+                "Good (7-8)": "Good evidence with some gaps",
+                "Satisfactory (5-6)": "Limited evidence",
+                "Needs Work (0-4)": "Little to no supporting evidence"
+            }}
+        }},
+        "Structure & Coherence": {{
+            "weight": 5,
+            "levels": {{
+                "Excellent (5)": "Clear introduction, body, conclusion; logical flow",
+                "Good (4)": "Generally well-structured",
+                "Satisfactory (3)": "Some structure issues",
+                "Needs Work (0-2)": "Poor organization"
+            }}
+        }},
+        "Language & Expression": {{
+            "weight": 5,
+            "levels": {{
+                "Excellent (5)": "Clear, academic language; appropriate terminology",
+                "Good (4)": "Generally clear expression",
+                "Satisfactory (3)": "Some language issues",
+                "Needs Work (0-2)": "Significant language problems"
+            }}
+        }}
+    }}
+}}"""
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a History education expert creating rigorous essay questions."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=2500,
+            response_format={"type": "json_object"}
+        )
+        
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"[Essay Question Error] {e}")
+        return {"error": str(e)}
+
+
+def create_exam_docx(exam_data: Dict[str, Any], output_path: Path) -> Path:
+    """Generate a formatted DOCX exam paper."""
+    
+    if not DOCX_AVAILABLE:
+        raise HTTPException(status_code=500, detail="python-docx not available")
+    
+    from docx.shared import Inches, Cm
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    
+    doc = Document()
+    
+    # Set up styles
+    style = doc.styles['Normal']
+    font = style.font
+    font.name = 'Times New Roman'
+    font.size = Pt(12)
+    
+    # ===== HEADER =====
+    header = doc.add_paragraph()
+    header.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = header.add_run(f"{exam_data['module_code']}: {exam_data['module_name']}")
+    run.bold = True
+    run.font.size = Pt(16)
+    
+    # Exam details table
+    details_table = doc.add_table(rows=4, cols=2)
+    details_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    details = [
+        ("Duration:", f"{exam_data['duration_hours']} hours"),
+        ("Total Marks:", str(exam_data['total_marks'])),
+        ("Date:", datetime.now().strftime("%B %Y")),
+        ("Instructions:", "Answer ALL questions")
+    ]
+    for i, (label, value) in enumerate(details):
+        details_table.rows[i].cells[0].text = label
+        details_table.rows[i].cells[1].text = value
+    
+    doc.add_paragraph()  # Spacer
+    
+    # ===== SECTION 1: SOURCE-BASED QUESTIONS =====
+    for q_num, source_question in enumerate(exam_data.get('source_questions', []), 1):
+        # Question header
+        q_header = doc.add_paragraph()
+        run = q_header.add_run(f"QUESTION {q_num}: {source_question.get('topic', 'Source-Based Question')}")
+        run.bold = True
+        run.font.size = Pt(14)
+        
+        marks_para = doc.add_paragraph()
+        marks_para.add_run(f"[{source_question.get('total_marks', 25)} marks]").italic = True
+        
+        # Sources
+        for source in source_question.get('sources', []):
+            source_para = doc.add_paragraph()
+            source_para.add_run(f"{source['label']}: ").bold = True
+            source_para.add_run(f"{source.get('type', '')} - {source.get('title', '')}")
+            
+            if source.get('author'):
+                doc.add_paragraph(f"Author/Origin: {source['author']}, {source.get('date', '')}")
+            
+            content_para = doc.add_paragraph()
+            content_para.add_run(source.get('content', '')).italic = True
+            
+            if source.get('context'):
+                ctx = doc.add_paragraph()
+                ctx.add_run(f"Context: {source['context']}").font.size = Pt(10)
+            
+            doc.add_paragraph()  # Spacer
+        
+        # Questions
+        questions_header = doc.add_paragraph()
+        questions_header.add_run("Study the sources above and answer the following questions:").bold = True
+        
+        for q in source_question.get('questions', []):
+            q_para = doc.add_paragraph()
+            q_para.add_run(f"{q['number']} ")
+            if q.get('source_reference'):
+                q_para.add_run(f"[{q['source_reference']}] ")
+            q_para.add_run(q['question'])
+            q_para.add_run(f" ({q['marks']})").bold = True
+        
+        doc.add_paragraph()  # Spacer
+        doc.add_paragraph("_" * 60)
+    
+    # ===== SECTION 2: METHODOLOGY =====
+    if exam_data.get('methodology_question'):
+        mq = exam_data['methodology_question']
+        
+        m_header = doc.add_paragraph()
+        run = m_header.add_run(f"QUESTION {len(exam_data.get('source_questions', [])) + 1}: METHODOLOGY")
+        run.bold = True
+        run.font.size = Pt(14)
+        
+        marks_para = doc.add_paragraph()
+        marks_para.add_run(f"[{mq.get('marks', 25)} marks]").italic = True
+        
+        task_para = doc.add_paragraph()
+        task_para.add_run(mq.get('task', ''))
+        
+        if mq.get('requirements'):
+            req_para = doc.add_paragraph()
+            req_para.add_run("Your response must address:").bold = True
+            for req in mq['requirements']:
+                doc.add_paragraph(f"• {req}", style='List Bullet')
+        
+        # Rubric table
+        if mq.get('rubric'):
+            doc.add_paragraph()
+            rubric_header = doc.add_paragraph()
+            rubric_header.add_run("Marking Rubric:").bold = True
+            
+            rubric = mq['rubric']
+            table = doc.add_table(rows=len(rubric) + 1, cols=4)
+            table.style = 'Table Grid'
+            
+            # Header row
+            headers = ['Criterion', '3 Marks', '2 Marks', '1 Mark']
+            for i, h in enumerate(headers):
+                table.rows[0].cells[i].text = h
+                table.rows[0].cells[i].paragraphs[0].runs[0].bold = True
+            
+            # Data rows
+            for row_idx, (criterion, levels) in enumerate(rubric.items(), 1):
+                table.rows[row_idx].cells[0].text = criterion
+                table.rows[row_idx].cells[1].text = levels.get('3 marks', '')
+                table.rows[row_idx].cells[2].text = levels.get('2 marks', '')
+                table.rows[row_idx].cells[3].text = levels.get('1 mark', '')
+        
+        doc.add_paragraph()
+        doc.add_paragraph("_" * 60)
+    
+    # ===== SECTION 3: ESSAY =====
+    if exam_data.get('essay_question'):
+        eq = exam_data['essay_question']
+        
+        e_header = doc.add_paragraph()
+        q_num = len(exam_data.get('source_questions', [])) + 2
+        run = e_header.add_run(f"QUESTION {q_num}: ESSAY")
+        run.bold = True
+        run.font.size = Pt(14)
+        
+        marks_para = doc.add_paragraph()
+        marks_para.add_run(f"[{eq.get('marks', 50)} marks]").italic = True
+        
+        if eq.get('context'):
+            ctx = doc.add_paragraph()
+            ctx.add_run(eq['context']).italic = True
+        
+        q_para = doc.add_paragraph()
+        q_para.add_run(eq.get('question', ''))
+        
+        # Essay matrix
+        if eq.get('matrix'):
+            doc.add_paragraph()
+            matrix_header = doc.add_paragraph()
+            matrix_header.add_run("Essay Assessment Matrix:").bold = True
+            
+            matrix = eq['matrix']
+            table = doc.add_table(rows=len(matrix) + 1, cols=5)
+            table.style = 'Table Grid'
+            
+            # Header
+            headers = ['Criterion', 'Excellent', 'Good', 'Satisfactory', 'Needs Work']
+            for i, h in enumerate(headers):
+                table.rows[0].cells[i].text = h
+                table.rows[0].cells[i].paragraphs[0].runs[0].bold = True
+            
+            # Data
+            for row_idx, (criterion, data) in enumerate(matrix.items(), 1):
+                table.rows[row_idx].cells[0].text = f"{criterion} ({data.get('weight', '')})"
+                levels = data.get('levels', {})
+                for col_idx, level_name in enumerate(['Excellent', 'Good', 'Satisfactory', 'Needs Work']):
+                    matching_key = [k for k in levels.keys() if level_name.lower() in k.lower()]
+                    if matching_key:
+                        table.rows[row_idx].cells[col_idx + 1].text = levels[matching_key[0]]
+    
+    # ===== FOOTER =====
+    doc.add_paragraph()
+    footer = doc.add_paragraph()
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer.add_run(f"TOTAL: {exam_data['total_marks']} marks").bold = True
+    
+    # Save
+    doc.save(str(output_path))
+    return output_path
+
+
+@app.post("/api/exams/generate")
+async def generate_exam(request: ExamGenerationRequest):
+    """Generate a complete History exam paper."""
+    
+    print(f"[Exam Builder] Generating exam for topics: {request.topics}")
+    
+    try:
+        exam_data = {
+            "module_code": request.module_code,
+            "module_name": request.module_name,
+            "total_marks": request.total_marks,
+            "duration_hours": request.duration_hours,
+            "source_questions": [],
+            "methodology_question": None,
+            "essay_question": None,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        # Generate source-based questions (2 x 25 marks each = 50 marks)
+        marks_per_source_question = 25
+        for i, topic in enumerate(request.topics[:2]):  # Max 2 source-based questions
+            print(f"[Exam Builder] Generating source-based question {i+1} for: {topic}")
+            
+            # Generate sources
+            sources_data = await generate_exam_sources(topic, i + 1)
+            sources = sources_data.get('sources', [])
+            
+            # Generate questions
+            questions_data = await generate_source_questions(sources, topic, marks_per_source_question)
+            
+            exam_data["source_questions"].append({
+                "question_number": i + 1,
+                "topic": topic,
+                "sources": sources,
+                "questions": questions_data.get('questions', []),
+                "total_marks": marks_per_source_question
+            })
+        
+        # Generate methodology question (25 marks)
+        print(f"[Exam Builder] Generating methodology question for: {request.methodology_topic}")
+        exam_data["methodology_question"] = await generate_methodology_question(
+            request.methodology_topic, 
+            marks=25
+        )
+        
+        # Generate essay question (50 marks)
+        print(f"[Exam Builder] Generating essay question for: {request.essay_topic}")
+        exam_data["essay_question"] = await generate_essay_question(
+            request.essay_topic,
+            marks=50
+        )
+        
+        # Calculate actual total
+        actual_total = sum(sq.get('total_marks', 0) for sq in exam_data['source_questions'])
+        actual_total += exam_data['methodology_question'].get('marks', 0) if exam_data['methodology_question'] else 0
+        actual_total += exam_data['essay_question'].get('marks', 0) if exam_data['essay_question'] else 0
+        exam_data['calculated_total'] = actual_total
+        
+        # Generate DOCX
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{request.module_code}_Exam_{timestamp}.docx"
+        output_path = OUTPUT_DIR / filename
+        
+        create_exam_docx(exam_data, output_path)
+        
+        # Store in database
+        exam_record = {
+            **exam_data,
+            "filename": filename,
+            "file_path": str(output_path)
+        }
+        result = db["exams"].insert_one(exam_record)
+        exam_data["_id"] = str(result.inserted_id)
+        exam_data["filename"] = filename
+        
+        return {
+            "success": True,
+            "exam": exam_data,
+            "download_url": f"/api/exams/download/{filename}"
+        }
+        
+    except Exception as e:
+        print(f"[Exam Generation Error] {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/exams/download/{filename}")
+async def download_exam(filename: str):
+    """Download a generated exam paper."""
+    file_path = OUTPUT_DIR / filename
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Exam file not found")
+    
+    return FileResponse(
+        path=str(file_path),
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
+
+@app.get("/api/exams")
+async def list_exams():
+    """List all generated exams."""
+    exams = list(db["exams"].find().sort("created_at", -1).limit(20))
+    for exam in exams:
+        exam["_id"] = str(exam["_id"])
+    return {"exams": exams}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)
