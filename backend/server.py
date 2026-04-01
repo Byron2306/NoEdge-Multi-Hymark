@@ -3181,9 +3181,252 @@ def create_exam_docx(exam_data: Dict[str, Any], output_path: Path) -> Path:
     return output_path
 
 
+def create_memorandum_docx(exam_data: Dict[str, Any], output_path: Path) -> Path:
+    """Generate a memorandum/answer key document for the exam."""
+    
+    if not DOCX_AVAILABLE:
+        raise HTTPException(status_code=500, detail="python-docx not available")
+    
+    from docx.shared import Inches, Cm
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    
+    doc = Document()
+    
+    # Set up styles
+    style = doc.styles['Normal']
+    font = style.font
+    font.name = 'Times New Roman'
+    font.size = Pt(12)
+    
+    # ===== HEADER =====
+    header = doc.add_paragraph()
+    header.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = header.add_run(f"{exam_data['module_code']}: {exam_data['module_name']}")
+    run.bold = True
+    run.font.size = Pt(16)
+    
+    memo_title = doc.add_paragraph()
+    memo_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = memo_title.add_run("MEMORANDUM / MARKING GUIDE")
+    run.bold = True
+    run.font.size = Pt(14)
+    run.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)  # Dark red
+    
+    doc.add_paragraph()
+    
+    # ===== SOURCE-BASED QUESTIONS ANSWERS =====
+    for q_num, source_question in enumerate(exam_data.get('source_questions', []), 1):
+        q_header = doc.add_paragraph()
+        run = q_header.add_run(f"QUESTION {q_num}: {source_question.get('topic', 'Source-Based Question')} - ANSWERS")
+        run.bold = True
+        run.font.size = Pt(14)
+        
+        marks_para = doc.add_paragraph()
+        marks_para.add_run(f"[{source_question.get('total_marks', 25)} marks]").italic = True
+        
+        # Answer key for each question
+        for q in source_question.get('questions', []):
+            q_para = doc.add_paragraph()
+            q_para.add_run(f"{q['number']} ").bold = True
+            q_para.add_run(f"({q['marks']} marks)")
+            
+            # Question text
+            question_text = doc.add_paragraph()
+            question_text.add_run(f"Question: {q['question']}").italic = True
+            
+            # Expected answer points
+            if q.get('expected_answer_points'):
+                answer_header = doc.add_paragraph()
+                answer_header.add_run("Expected Answer Points:").bold = True
+                
+                for point in q['expected_answer_points']:
+                    point_para = doc.add_paragraph(f"• {point}", style='List Bullet')
+                    # Color the answer points green
+                    for run in point_para.runs:
+                        run.font.color.rgb = RGBColor(0x00, 0x80, 0x00)
+            
+            # Cognitive level
+            if q.get('cognitive_level'):
+                level_para = doc.add_paragraph()
+                level_para.add_run(f"Cognitive Level: {q['cognitive_level']}").font.size = Pt(10)
+            
+            doc.add_paragraph()  # Spacer
+        
+        doc.add_paragraph("_" * 60)
+    
+    # ===== METHODOLOGY MARKING GUIDE =====
+    if exam_data.get('methodology_question'):
+        mq = exam_data['methodology_question']
+        
+        m_header = doc.add_paragraph()
+        run = m_header.add_run(f"QUESTION {len(exam_data.get('source_questions', [])) + 1}: METHODOLOGY - MARKING GUIDE")
+        run.bold = True
+        run.font.size = Pt(14)
+        
+        marks_para = doc.add_paragraph()
+        marks_para.add_run(f"[{mq.get('marks', 25)} marks]").italic = True
+        
+        # Marking rubric table with detailed descriptors
+        if mq.get('rubric'):
+            rubric_header = doc.add_paragraph()
+            rubric_header.add_run("Detailed Marking Rubric:").bold = True
+            
+            rubric = mq['rubric']
+            table = doc.add_table(rows=len(rubric) + 1, cols=4)
+            table.style = 'Table Grid'
+            
+            # Header row
+            headers = ['Criterion', '3 Marks (Excellent)', '2 Marks (Good)', '1 Mark (Basic)']
+            for i, h in enumerate(headers):
+                cell = table.rows[0].cells[i]
+                cell.text = h
+                cell.paragraphs[0].runs[0].bold = True
+                # Shade header row
+                from docx.oxml.ns import nsdecls
+                from docx.oxml import parse_xml
+                shading_elm = parse_xml(f'<w:shd {nsdecls("w")} w:fill="D9E2F3"/>')
+                cell._tc.get_or_add_tcPr().append(shading_elm)
+            
+            # Data rows
+            for row_idx, (criterion, levels) in enumerate(rubric.items(), 1):
+                table.rows[row_idx].cells[0].text = criterion
+                table.rows[row_idx].cells[1].text = levels.get('3 marks', '')
+                table.rows[row_idx].cells[2].text = levels.get('2 marks', '')
+                table.rows[row_idx].cells[3].text = levels.get('1 mark', '')
+        
+        # Marking notes
+        doc.add_paragraph()
+        notes = doc.add_paragraph()
+        notes.add_run("Marking Notes:").bold = True
+        doc.add_paragraph("• Award marks holistically based on overall quality", style='List Bullet')
+        doc.add_paragraph("• Consider creativity and practical applicability", style='List Bullet')
+        doc.add_paragraph("• Historical accuracy of content is essential", style='List Bullet')
+        
+        doc.add_paragraph("_" * 60)
+    
+    # ===== ESSAY MARKING MATRIX =====
+    if exam_data.get('essay_question'):
+        eq = exam_data['essay_question']
+        
+        e_header = doc.add_paragraph()
+        q_num = len(exam_data.get('source_questions', [])) + 2
+        run = e_header.add_run(f"QUESTION {q_num}: ESSAY - MARKING MATRIX")
+        run.bold = True
+        run.font.size = Pt(14)
+        
+        marks_para = doc.add_paragraph()
+        marks_para.add_run(f"[{eq.get('marks', 50)} marks]").italic = True
+        
+        # Essay question reminder
+        q_para = doc.add_paragraph()
+        q_para.add_run("Question: ").bold = True
+        q_para.add_run(eq.get('question', ''))
+        
+        doc.add_paragraph()
+        
+        # Full Essay Assessment Matrix
+        if eq.get('matrix'):
+            matrix_header = doc.add_paragraph()
+            matrix_header.add_run("ESSAY ASSESSMENT MATRIX:").bold = True
+            matrix_header.runs[0].font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
+            
+            matrix = eq['matrix']
+            
+            # Create comprehensive table
+            table = doc.add_table(rows=len(matrix) + 1, cols=5)
+            table.style = 'Table Grid'
+            
+            # Header with mark ranges
+            headers = ['Criterion (Weight)', 'Excellent', 'Good', 'Satisfactory', 'Needs Improvement']
+            for i, h in enumerate(headers):
+                cell = table.rows[0].cells[i]
+                cell.text = h
+                cell.paragraphs[0].runs[0].bold = True
+                # Shade header
+                from docx.oxml.ns import nsdecls
+                from docx.oxml import parse_xml
+                shading_elm = parse_xml(f'<w:shd {nsdecls("w")} w:fill="FDE9D9"/>')
+                cell._tc.get_or_add_tcPr().append(shading_elm)
+            
+            # Data rows with full descriptors
+            for row_idx, (criterion, data) in enumerate(matrix.items(), 1):
+                weight = data.get('weight', 0)
+                table.rows[row_idx].cells[0].text = f"{criterion}\n({weight} marks)"
+                
+                levels = data.get('levels', {})
+                level_names = ['Excellent', 'Good', 'Satisfactory', 'Needs Work']
+                
+                for col_idx, level_name in enumerate(level_names):
+                    matching_key = [k for k in levels.keys() if level_name.lower() in k.lower()]
+                    if matching_key:
+                        # Include mark range in cell
+                        key = matching_key[0]
+                        # Extract mark range from key if present
+                        mark_range = ""
+                        import re
+                        range_match = re.search(r'\(([^)]+)\)', key)
+                        if range_match:
+                            mark_range = f"[{range_match.group(1)}]\n"
+                        table.rows[row_idx].cells[col_idx + 1].text = f"{mark_range}{levels[key]}"
+            
+            doc.add_paragraph()
+            
+            # Marking guidelines
+            guide_header = doc.add_paragraph()
+            guide_header.add_run("Essay Marking Guidelines:").bold = True
+            
+            doc.add_paragraph("1. Read the entire essay before assigning marks", style='List Bullet')
+            doc.add_paragraph("2. Assess each criterion independently using the matrix", style='List Bullet')
+            doc.add_paragraph("3. Use the full range of marks within each level", style='List Bullet')
+            doc.add_paragraph("4. Provide written feedback highlighting strengths and areas for improvement", style='List Bullet')
+            doc.add_paragraph("5. Total marks = sum of all criteria scores", style='List Bullet')
+            
+            # Mark calculation box
+            doc.add_paragraph()
+            calc_header = doc.add_paragraph()
+            calc_header.add_run("Mark Calculation:").bold = True
+            
+            calc_table = doc.add_table(rows=len(matrix) + 2, cols=2)
+            calc_table.style = 'Table Grid'
+            
+            calc_table.rows[0].cells[0].text = "Criterion"
+            calc_table.rows[0].cells[1].text = "Score"
+            calc_table.rows[0].cells[0].paragraphs[0].runs[0].bold = True
+            calc_table.rows[0].cells[1].paragraphs[0].runs[0].bold = True
+            
+            for row_idx, (criterion, data) in enumerate(matrix.items(), 1):
+                calc_table.rows[row_idx].cells[0].text = f"{criterion} (max {data.get('weight', 0)})"
+                calc_table.rows[row_idx].cells[1].text = "_____ / " + str(data.get('weight', 0))
+            
+            # Total row
+            total_row = len(matrix) + 1
+            calc_table.rows[total_row].cells[0].text = "TOTAL"
+            calc_table.rows[total_row].cells[0].paragraphs[0].runs[0].bold = True
+            calc_table.rows[total_row].cells[1].text = f"_____ / {eq.get('marks', 50)}"
+            calc_table.rows[total_row].cells[1].paragraphs[0].runs[0].bold = True
+    
+    # ===== FOOTER =====
+    doc.add_paragraph()
+    doc.add_paragraph("_" * 60)
+    footer = doc.add_paragraph()
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer.add_run(f"TOTAL EXAM MARKS: {exam_data['total_marks']}").bold = True
+    
+    confidential = doc.add_paragraph()
+    confidential.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = confidential.add_run("CONFIDENTIAL - FOR EXAMINER USE ONLY")
+    run.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
+    run.bold = True
+    
+    # Save
+    doc.save(str(output_path))
+    return output_path
+
+
 @app.post("/api/exams/generate")
 async def generate_exam(request: ExamGenerationRequest):
-    """Generate a complete History exam paper."""
+    """Generate a complete History exam paper with memorandum."""
     
     print(f"[Exam Builder] Generating exam for topics: {request.topics}")
     
@@ -3239,27 +3482,38 @@ async def generate_exam(request: ExamGenerationRequest):
         actual_total += exam_data['essay_question'].get('marks', 0) if exam_data['essay_question'] else 0
         exam_data['calculated_total'] = actual_total
         
-        # Generate DOCX
+        # Generate DOCX exam paper
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{request.module_code}_Exam_{timestamp}.docx"
         output_path = OUTPUT_DIR / filename
         
         create_exam_docx(exam_data, output_path)
         
+        # Generate Memorandum DOCX
+        memo_filename = f"{request.module_code}_Memorandum_{timestamp}.docx"
+        memo_path = OUTPUT_DIR / memo_filename
+        
+        create_memorandum_docx(exam_data, memo_path)
+        print(f"[Exam Builder] Generated memorandum: {memo_filename}")
+        
         # Store in database
         exam_record = {
             **exam_data,
             "filename": filename,
-            "file_path": str(output_path)
+            "file_path": str(output_path),
+            "memo_filename": memo_filename,
+            "memo_path": str(memo_path)
         }
         result = db["exams"].insert_one(exam_record)
         exam_data["_id"] = str(result.inserted_id)
         exam_data["filename"] = filename
+        exam_data["memo_filename"] = memo_filename
         
         return {
             "success": True,
             "exam": exam_data,
-            "download_url": f"/api/exams/download/{filename}"
+            "download_url": f"/api/exams/download/{filename}",
+            "memo_download_url": f"/api/exams/download/{memo_filename}"
         }
         
     except Exception as e:

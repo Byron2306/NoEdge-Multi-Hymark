@@ -1100,14 +1100,26 @@ function ExamBuilderTab({ showToast }) {
                 <h3>{generatedExam.module_code}: {generatedExam.module_name}</h3>
                 <p>Total: {generatedExam.calculated_total || generatedExam.total_marks} marks | Duration: {generatedExam.duration_hours} hours</p>
               </div>
-              <button
-                className="download-exam-btn"
-                onClick={() => handleDownloadExam(generatedExam.filename)}
-                data-testid="download-generated-exam"
-              >
-                <Download size={18} />
-                Download DOCX
-              </button>
+              <div className="exam-download-buttons">
+                <button
+                  className="download-exam-btn"
+                  onClick={() => handleDownloadExam(generatedExam.filename)}
+                  data-testid="download-generated-exam"
+                >
+                  <Download size={18} />
+                  Exam Paper
+                </button>
+                {generatedExam.memo_filename && (
+                  <button
+                    className="download-memo-btn"
+                    onClick={() => handleDownloadExam(generatedExam.memo_filename)}
+                    data-testid="download-generated-memo"
+                  >
+                    <FileCheck size={18} />
+                    Memorandum
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="exam-sections-preview">
@@ -1162,12 +1174,24 @@ function ExamBuilderTab({ showToast }) {
                   <span className="exam-date">{new Date(exam.created_at).toLocaleDateString()}</span>
                   <span className="exam-marks">{exam.calculated_total || exam.total_marks} marks</span>
                 </div>
-                <button
-                  className="download-btn-small"
-                  onClick={() => handleDownloadExam(exam.filename)}
-                >
-                  <Download size={14} />
-                </button>
+                <div className="recent-exam-actions">
+                  <button
+                    className="download-btn-small"
+                    onClick={() => handleDownloadExam(exam.filename)}
+                    title="Download Exam Paper"
+                  >
+                    <Download size={14} />
+                  </button>
+                  {exam.memo_filename && (
+                    <button
+                      className="download-btn-small memo-btn"
+                      onClick={() => handleDownloadExam(exam.memo_filename)}
+                      title="Download Memorandum"
+                    >
+                      <FileCheck size={14} />
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>

@@ -2246,6 +2246,11 @@
   font-size: 0.85rem;
 }
 
+.exam-download-buttons {
+  display: flex;
+  gap: 0.75rem;
+}
+
 .download-exam-btn {
   display: flex;
   align-items: center;
@@ -2262,6 +2267,25 @@
 }
 
 .download-exam-btn:hover {
+  transform: scale(1.05);
+}
+
+.download-memo-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  background: linear-gradient(135deg, #e85d04 0%, #c94b00 100%);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.download-memo-btn:hover {
   transform: scale(1.05);
 }
 
@@ -2380,6 +2404,22 @@
 .download-btn-small:hover {
   background: #1e3a5f;
   color: #e8eef4;
+}
+
+.download-btn-small.memo-btn {
+  background: rgba(232, 93, 4, 0.2);
+  border-color: rgba(232, 93, 4, 0.3);
+  color: #e85d04;
+}
+
+.download-btn-small.memo-btn:hover {
+  background: rgba(232, 93, 4, 0.4);
+  color: #fff;
+}
+
+.recent-exam-actions {
+  display: flex;
+  gap: 0.5rem;
 }
 
 /* Spin animation */

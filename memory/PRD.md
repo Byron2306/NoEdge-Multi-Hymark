@@ -46,10 +46,17 @@ Frontend (React)         Backend (FastAPI)          Database (MongoDB)
 - [x] **Methodology question** - Lesson planning task for trainee teachers with marking rubric
 - [x] **Essay question** - With full essay assessment matrix (5 criteria, 50 marks)
 - [x] **DOCX generation** - Professionally formatted exam paper
+- [x] **Memorandum generation** - Complete marking guide with:
+  - Expected answer points for each question
+  - Cognitive levels indicated
+  - Full methodology marking rubric
+  - Complete essay assessment matrix with mark ranges
+  - Score calculation table for easy marking
 - [x] **Exam listing** (`GET /api/exams`)
-- [x] **Exam download** (`GET /api/exams/download/{filename}`)
+- [x] **Exam/Memo download** (`GET /api/exams/download/{filename}`)
 - [x] **Frontend UI** - Full form with topic inputs, suggestion chips, validation
-- [x] **Recent Exams list** - Shows previously generated exams
+- [x] **Dual download buttons** - Separate buttons for Exam Paper and Memorandum
+- [x] **Recent Exams list** - Shows both exam and memo download options
 - [x] **MongoDB persistence** - Exams stored in `exams` collection
 
 ### Backend Features (Original)
