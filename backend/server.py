@@ -1222,8 +1222,32 @@ async def process_efundi_zip(
             # Calculate percentage and final grade
             total_possible = rubric.get("total_marks", 100)
             total_score = assessment.get("total_score", 0)
+            
+            # Normalize score if criteria weights sum to more than total_marks
+            criteria_weight_sum = sum(c.get("weight", 0) for c in rubric.get("criteria", []))
+            if criteria_weight_sum > 0 and criteria_weight_sum != total_possible:
+                # Scale raw score to fit within total_marks
+                normalized_score = (total_score / criteria_weight_sum) * total_possible
+                print(f"[Score Normalize] {student_id}: raw {total_score}/{criteria_weight_sum} -> {normalized_score:.1f}/{total_possible}")
+                total_score = round(normalized_score, 2)
+                assessment["total_score"] = total_score
+            
+            # Cap at total_possible to prevent >100%
+            if total_score > total_possible:
+                print(f"[Score Cap] {student_id}: {total_score} capped to {total_possible}")
+                total_score = total_possible
+                assessment["total_score"] = total_score
+            
             percentage = (total_score / total_possible * 100) if total_possible > 0 else 0
-            assessment["percentage"] = round(percentage, 2)
+            assessment["percentage"] = round(min(percentage, 100), 2)
+            assessment["max_score"] = total_possible
+            
+            # Enrich criteria_scores with max_score from rubric
+            rubric_criteria_map = {c["name"]: c["weight"] for c in rubric.get("criteria", [])}
+            if assessment.get("criteria_scores"):
+                for crit_name, crit_data in assessment["criteria_scores"].items():
+                    if isinstance(crit_data, dict) and "max_score" not in crit_data:
+                        crit_data["max_score"] = rubric_criteria_map.get(crit_name, total_possible / max(len(assessment["criteria_scores"]), 1))
             
             # Store grade for CSV update - primary student
             grades_map[student_id] = total_score
