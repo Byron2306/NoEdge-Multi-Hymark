@@ -665,8 +665,8 @@ function JobCard({ job, onDownload, onUploadToEfundi, onViewDetails }) {
     failed: 'Failed'
   };
 
-  // Calculate stats from assessments
-  const stats = job.results?.assessments ? {
+  // Calculate stats from assessments (guard against empty arrays)
+  const stats = job.results?.assessments?.length > 0 ? {
     count: job.results.assessments.length,
     avgScore: job.results.assessments.reduce((sum, a) => sum + (a.percentage || 0), 0) / job.results.assessments.length,
     minScore: Math.min(...job.results.assessments.map(a => a.percentage || 0)),
@@ -1337,7 +1337,7 @@ function App() {
 
   // Toast helpers
   const showToast = (message, type = 'info') => {
-    const id = Date.now();
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     setToasts(prev => [...prev, { id, message, type }]);
   };
 
@@ -1549,7 +1549,6 @@ function App() {
       
       const result = await api.post('/api/assess/bulk', formData, true);
       showToast(`Bulk assessment started! Job ID: ${result.job_id}`, 'success');
-      showToast(`Bulk assessment started! Job ID: ${result.job_id}`, 'success');
       
       // Start live monitoring
       setLiveJob(result.job_id);
@@ -1580,7 +1579,11 @@ function App() {
       }, 2000);
       
     } catch (error) {
-      showToast(`Failed to start assessment: ${error.message}`, 'error');
+      if (error.message === 'Failed to fetch') {
+        showToast('Upload failed: Network error. Please check your connection and try again. If uploading a large file, it may have timed out.', 'error');
+      } else {
+        showToast(`Failed to start assessment: ${error.message}`, 'error');
+      }
     } finally {
       setIsLoading(false);
     }
