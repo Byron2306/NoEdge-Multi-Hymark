@@ -279,7 +279,9 @@ IMPORTANT:
 def parse_essay_matrix_from_docx(file_path: Path) -> Dict[str, Any]:
     """Parse an essay assessment matrix/rubric from a DOCX file."""
     if not DOCX_AVAILABLE:
-        return parse_rubric_from_text(extract_document_content(file_path))
+        text = extract_document_content(file_path)
+        text_rubric = parse_rubric_from_text(text)
+        return _enrich_rubric_with_ai_if_needed(text_rubric, text, file_path.name)
     
     doc = Document(str(file_path))
     rubric_data = {
@@ -308,6 +310,11 @@ def parse_essay_matrix_from_docx(file_path: Path) -> Dict[str, Any]:
             
             criterion_name = row.cells[0].text.strip()
             if not criterion_name:
+                continue
+            # Skip obvious non-criterion rows from noisy table exports.
+            if criterion_name.lower() in {"criterion", "criteria", "levels", "performance level"}:
+                continue
+            if len(criterion_name) < 2 or not re.search(r"[A-Za-z]", criterion_name):
                 continue
             
             # Extract marks from criterion name if present (e.g., "Thesis [10 marks]")
@@ -349,20 +356,81 @@ def parse_essay_matrix_from_docx(file_path: Path) -> Dict[str, Any]:
     
     # If no tables found, try text-based extraction first
     if not rubric_data["criteria"]:
-        text_rubric = parse_rubric_from_text(extract_document_content(file_path))
-        if text_rubric["criteria"]:
-            return text_rubric
-        
-        # Last resort: use AI to parse
         text = extract_document_content(file_path)
+        text_rubric = parse_rubric_from_text(text)
+        return _enrich_rubric_with_ai_if_needed(text_rubric, text, file_path.name)
+
+    # Even when table parsing succeeds, fall back to AI if extraction looks too generic.
+    text = extract_document_content(file_path)
+    return _enrich_rubric_with_ai_if_needed(rubric_data, text, file_path.name)
+
+
+def _rubric_parse_looks_weak(rubric_data: Dict[str, Any]) -> bool:
+    """Detect low-quality rubric parses that should be AI-enriched."""
+    criteria = rubric_data.get("criteria") or []
+    if not criteria:
+        return True
+
+    generic_descs = {
+        "outstanding performance",
+        "above average performance",
+        "meets basic requirements",
+        "below expectations",
+    }
+
+    level_count = 0
+    generic_count = 0
+    weak_name_count = 0
+    meaningful_desc_count = 0
+
+    for c in criteria:
+        name = (c.get("name") or "").strip()
+        if len(name) < 3 or not re.search(r"[A-Za-z]{2,}", name):
+            weak_name_count += 1
+
+        for level in (c.get("levels") or {}).values():
+            level_count += 1
+            desc = (level.get("description") or "").strip()
+            if desc.lower() in generic_descs:
+                generic_count += 1
+            if len(desc) >= 30 and re.search(r"[A-Za-z]{4,}", desc):
+                meaningful_desc_count += 1
+
+    if weak_name_count > 0:
+        return True
+    if level_count == 0:
+        return True
+    if generic_count / max(level_count, 1) >= 0.4:
+        return True
+    if meaningful_desc_count == 0:
+        return True
+    return False
+
+
+def _enrich_rubric_with_ai_if_needed(
+    rubric_data: Dict[str, Any],
+    extracted_text: str,
+    file_name: str,
+) -> Dict[str, Any]:
+    """Use AI parsing when deterministic extraction is missing detail."""
+    if not _rubric_parse_looks_weak(rubric_data):
+        return rubric_data
+
+    if not extracted_text.strip():
+        return rubric_data
+
+    try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        ai_rubric = loop.run_until_complete(ai_parse_rubric(text, file_path.name))
+        ai_rubric = loop.run_until_complete(ai_parse_rubric(extracted_text, file_name))
         loop.close()
-        
-        if ai_rubric and ai_rubric.get("criteria"):
-            return ai_rubric
-    
+    except Exception as e:
+        print(f"[Rubric AI Enrichment Error] {e}")
+        return rubric_data
+
+    if ai_rubric and ai_rubric.get("criteria"):
+        print("[Rubric Parser] Using AI-enriched rubric extraction")
+        return ai_rubric
     return rubric_data
 
 
