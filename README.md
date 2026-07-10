@@ -1,4 +1,10 @@
-**NoEdge-Multi-Hymark** is a dual-mode, AI-augmented academic assessment platform purpose-built for the NWU UTEW221 course. It combines two tightly coupled but independently operable sub-systems: 
+# NoEdge-Multi-Hymark 
+
+<p align="center">
+  <img src="homs.png" width="750" style="max-width: 92%; height: auto;">
+</p>
+
+Hymark is a dual-mode, AI-augmented academic assessment platform purpose-built for the NWU UTEW221 course. It combines two tightly coupled but independently operable sub-systems: 
   
  1. **Local HOMS (Hybrid Offline Marking System)** — a Python-based command-line and lightweight-web batch processing engine that uses *PyBryt* reference implementations and custom rubrics to automatically grade student programming assignments and Jupyter notebooks offline without dependency on cloud services. 
   
