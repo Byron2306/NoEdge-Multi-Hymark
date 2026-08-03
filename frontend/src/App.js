@@ -28,19 +28,26 @@ import {
 } from 'lucide-react';
 import './App.css';
 
-const API_URL = process.env.REACT_APP_BACKEND_URL || '';
+const API_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:3001';
 
 // API helper with timeout support
 const api = {
   async get(endpoint) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
-    
+    const timeoutId = setTimeout(() => controller.abort(), 120000);
+
     try {
       const res = await fetch(`${API_URL}${endpoint}`, { signal: controller.signal });
       clearTimeout(timeoutId);
-      if (!res.ok) throw new Error(`API Error: ${res.status}`);
-      return res.json();
+
+      if (!res.ok) throw new Error(`API Error: ${res.status} when hitting ${endpoint}`);
+
+      const contentType = res.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        return res.json();
+      }
+
+      return {}; // Return empty object fallback if server sent back string text
     } catch (error) {
       clearTimeout(timeoutId);
       if (error.name === 'AbortError') {
@@ -51,8 +58,8 @@ const api = {
   },
   async post(endpoint, data, isFormData = false) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 minute timeout for AI assessment
-    
+    const timeoutId = setTimeout(() => controller.abort(), 180000);
+
     const options = {
       method: 'POST',
       body: isFormData ? data : JSON.stringify(data),
@@ -61,15 +68,33 @@ const api = {
     if (!isFormData) {
       options.headers = { 'Content-Type': 'application/json' };
     }
-    
+
     try {
       const res = await fetch(`${API_URL}${endpoint}`, options);
       clearTimeout(timeoutId);
+
+      // 1. If the request failed, handle it intelligently
       if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(errorText || `API Error: ${res.status}`);
+        const contentType = res.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          const jsonError = await res.json();
+          // Extract FastAPI's specific detail array if present
+          const message = jsonError.detail ? JSON.stringify(jsonError.detail) : "Unknown backend error";
+          throw new Error(message);
+        } else {
+          const errorText = await res.text();
+          throw new Error(errorText || `Server Error Status: ${res.status}`);
+        }
       }
-      return res.json();
+
+      // 2. Safe parsing of success data
+      const successContentType = res.headers.get("content-type");
+      if (successContentType && successContentType.includes("application/json")) {
+        return await res.json();
+      }
+
+      throw new Error("Server succeeded but failed to return a valid JSON payload.");
+
     } catch (error) {
       clearTimeout(timeoutId);
       if (error.name === 'AbortError') {
@@ -80,38 +105,39 @@ const api = {
   }
 };
 
+
 // Toast notification component
 function Toast({ message, type, onClose }) {
-  useEffect(() => {
-    const timer = setTimeout(onClose, 4000);
-    return () => clearTimeout(timer);
-  }, [onClose]);
+    useEffect(() => {
+      const timer = setTimeout(onClose, 4000);
+      return () => clearTimeout(timer);
+    }, [onClose]);
 
-  const icons = {
-    success: <CheckCircle size={18} />,
-    error: <AlertCircle size={18} />,
-    info: <Clock size={18} />
-  };
+const icons = {
+  success: <CheckCircle size={18} />,
+  error: <AlertCircle size={18} />,
+  info: <Clock size={18} />
+};
 
-  return (
-    <div className={`toast toast-${type}`} data-testid="toast-notification">
-      {icons[type]}
-      <span>{message}</span>
-      <button onClick={onClose} className="toast-close">
-        <X size={16} />
-      </button>
-    </div>
-  );
+return (
+  <div className={`toast toast-${type}`} data-testid="toast-notification">
+    {icons[type]}
+    <span>{message}</span>
+    <button onClick={onClose} className="toast-close">
+      <X size={16} />
+    </button>
+  </div>
+);
 }
 
 // Job Results Modal - shows per-student breakdown
 function JobResultsModal({ job, onClose, onDownload }) {
   const [expandedStudent, setExpandedStudent] = useState(null);
   const assessments = job.results?.assessments || [];
-  
+
   // Sort by score descending
   const sortedAssessments = [...assessments].sort((a, b) => (b.percentage || 0) - (a.percentage || 0));
-  
+
   // Calculate stats
   const stats = assessments.length > 0 ? {
     count: assessments.length,
@@ -135,7 +161,7 @@ function JobResultsModal({ job, onClose, onDownload }) {
           <h2><Award size={24} /> Assessment Results: {job.job_id}</h2>
           <button className="modal-close" onClick={onClose}><X size={24} /></button>
         </div>
-        
+
         {stats && (
           <div className="results-stats-bar">
             <div className="stat-item">
@@ -158,15 +184,15 @@ function JobResultsModal({ job, onClose, onDownload }) {
             </div>
           </div>
         )}
-        
+
         <div className="modal-body">
           <div className="students-list">
             {sortedAssessments.map((assessment, index) => (
-              <div 
+              <div
                 key={assessment.student_id || index}
                 className={`student-result-card ${expandedStudent === index ? 'expanded' : ''}`}
               >
-                <div 
+                <div
                   className="student-result-header"
                   onClick={() => setExpandedStudent(expandedStudent === index ? null : index)}
                 >
@@ -183,7 +209,7 @@ function JobResultsModal({ job, onClose, onDownload }) {
                   </div>
                   <ChevronRight size={20} className={`expand-icon ${expandedStudent === index ? 'rotated' : ''}`} />
                 </div>
-                
+
                 {expandedStudent === index && (
                   <div className="student-result-details">
                     {/* Criteria breakdown */}
@@ -202,7 +228,7 @@ function JobResultsModal({ job, onClose, onDownload }) {
                         ))}
                       </div>
                     )}
-                    
+
                     {/* Strengths */}
                     {assessment.strengths && assessment.strengths.length > 0 && (
                       <div className="feedback-section strengths">
@@ -212,7 +238,7 @@ function JobResultsModal({ job, onClose, onDownload }) {
                         </ul>
                       </div>
                     )}
-                    
+
                     {/* Areas for improvement */}
                     {assessment.areas_for_improvement && assessment.areas_for_improvement.length > 0 && (
                       <div className="feedback-section improvements">
@@ -222,7 +248,7 @@ function JobResultsModal({ job, onClose, onDownload }) {
                         </ul>
                       </div>
                     )}
-                    
+
                     {/* Overall feedback */}
                     {assessment.overall_feedback && (
                       <div className="overall-feedback">
@@ -230,7 +256,7 @@ function JobResultsModal({ job, onClose, onDownload }) {
                         <p>{assessment.overall_feedback}</p>
                       </div>
                     )}
-                    
+
                     {/* Group members */}
                     {assessment.group_members && (
                       <div className="group-members">
@@ -248,7 +274,7 @@ function JobResultsModal({ job, onClose, onDownload }) {
             ))}
           </div>
         </div>
-        
+
         <div className="modal-footer">
           <button className="btn-secondary" onClick={onClose}>Close</button>
           <button className="btn-primary" onClick={() => onDownload(job.job_id)}>
@@ -299,8 +325,8 @@ function LiveProgressOverlay({ jobId, progress, onClose }) {
 
         <div className="live-progress-bar-container">
           <div className="live-progress-bar">
-            <div 
-              className="live-progress-fill" 
+            <div
+              className="live-progress-fill"
               style={{ width: `${percentComplete}%` }}
             />
           </div>
@@ -322,8 +348,8 @@ function LiveProgressOverlay({ jobId, progress, onClose }) {
             {assessments.slice(-5).reverse().map((a, i) => (
               <div key={i} className="live-completed-item">
                 <span className="student-id">{a.student_id}</span>
-                <span 
-                  className="student-score" 
+                <span
+                  className="student-score"
                   style={{ backgroundColor: getScoreColor(a.percentage || 0) }}
                 >
                   {a.total_score}/{progress?.results?.total_marks || 25} ({(a.percentage || 0).toFixed(0)}%)
@@ -358,7 +384,7 @@ function RubricDetailCard({ rubric }) {
           <div className="criteria-items">
             {rubric.criteria.map((criterion, i) => (
               <div key={i} className="criterion-item">
-                <div 
+                <div
                   className={`criterion-header ${expandedCriterion === i ? 'expanded' : ''}`}
                   onClick={() => setExpandedCriterion(expandedCriterion === i ? null : i)}
                 >
@@ -445,7 +471,7 @@ function FileDropzone({ onFileSelect, accept, label, icon: Icon }) {
 // Rubric display card
 function RubricCard({ rubric, isSelected, onSelect }) {
   return (
-    <div 
+    <div
       className={`rubric-card ${isSelected ? 'rubric-card-selected' : ''}`}
       onClick={() => onSelect(rubric)}
       data-testid={`rubric-card-${rubric._id}`}
@@ -497,7 +523,7 @@ function AssessmentResultCard({ assessment, onViewDetails }) {
       </div>
       <div className="assessment-body">
         <div className="percentage-bar">
-          <div 
+          <div
             className={`percentage-fill ${getScoreColor(assessment.percentage)}`}
             style={{ width: `${Math.min(assessment.percentage, 100)}%` }}
           />
@@ -509,7 +535,7 @@ function AssessmentResultCard({ assessment, onViewDetails }) {
           </div>
         )}
       </div>
-      <button 
+      <button
         className="view-details-btn"
         onClick={() => onViewDetails(assessment)}
         data-testid={`view-details-${assessment.student_id}`}
@@ -542,7 +568,7 @@ function AssessmentDetailsModal({ assessment, onClose }) {
         <button className="modal-close" onClick={onClose}>
           <X size={24} />
         </button>
-        
+
         <div className="modal-header">
           <h2>Assessment Details</h2>
           <div className="modal-student-info">
@@ -562,7 +588,7 @@ function AssessmentDetailsModal({ assessment, onClose }) {
         </div>
 
         {assessment.annotated_file && (
-          <button 
+          <button
             className="download-annotated-btn"
             onClick={handleDownload}
             data-testid="download-annotated"
@@ -640,7 +666,7 @@ function AssessmentDetailsModal({ assessment, onClose }) {
 // Job status card
 function JobCard({ job, onDownload, onUploadToEfundi, onViewDetails }) {
   const [showLogs, setShowLogs] = useState(false);
-  
+
   const statusIcons = {
     starting: <RefreshCw size={18} className="spin" />,
     downloading: <RefreshCw size={18} className="spin" />,
@@ -700,13 +726,13 @@ function JobCard({ job, onDownload, onUploadToEfundi, onViewDetails }) {
           </div>
         )}
       </div>
-      
+
       {/* Progress during processing */}
       {job.status === 'processing' && job.results?.assessments && (
         <div className="job-progress">
           <div className="progress-bar">
-            <div 
-              className="progress-fill" 
+            <div
+              className="progress-fill"
               style={{ width: `${(job.results.assessments.length / (job.results.total_submissions || 15)) * 100}%` }}
             />
           </div>
@@ -715,11 +741,11 @@ function JobCard({ job, onDownload, onUploadToEfundi, onViewDetails }) {
           </span>
         </div>
       )}
-      
+
       {/* Logs toggle */}
       {job.logs && job.logs.length > 0 && (
         <div className="job-logs-section">
-          <button 
+          <button
             className="toggle-logs-btn"
             onClick={() => setShowLogs(!showLogs)}
           >
@@ -737,10 +763,10 @@ function JobCard({ job, onDownload, onUploadToEfundi, onViewDetails }) {
           )}
         </div>
       )}
-      
+
       {job.status === 'completed' && (
         <div className="job-actions">
-          <button 
+          <button
             className="view-details-btn"
             onClick={() => onViewDetails(job)}
             data-testid={`view-details-${job.job_id}`}
@@ -748,7 +774,7 @@ function JobCard({ job, onDownload, onUploadToEfundi, onViewDetails }) {
             <Eye size={16} />
             View Results
           </button>
-          <button 
+          <button
             className="download-btn"
             onClick={() => onDownload(job.job_id)}
             data-testid={`download-${job.job_id}`}
@@ -757,7 +783,7 @@ function JobCard({ job, onDownload, onUploadToEfundi, onViewDetails }) {
             Download ZIP
           </button>
           {job.assignment_url && onUploadToEfundi && (
-            <button 
+            <button
               className="upload-efundi-btn"
               onClick={() => onUploadToEfundi(job.job_id)}
               data-testid={`upload-efundi-${job.job_id}`}
@@ -833,7 +859,7 @@ function ExamBuilderTab({ showToast }) {
 
     try {
       setGenerationProgress('Generating source-based questions with historical sources...');
-      
+
       const response = await fetch(`${API_URL}/api/exams/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -954,7 +980,7 @@ function ExamBuilderTab({ showToast }) {
             <p className="form-hint">
               Enter two topics. The AI will generate historical sources (speeches, cartoons, documents) and questions for each.
             </p>
-            
+
             {sourceTopics.map((topic, index) => (
               <div key={index} className="topic-input-group">
                 <label>Question {index + 1} Topic</label>
@@ -992,7 +1018,7 @@ function ExamBuilderTab({ showToast }) {
             <p className="form-hint">
               A lesson planning question for trainee teachers. Students will create a teaching resource.
             </p>
-            
+
             <div className="topic-input-group">
               <label>Methodology Topic</label>
               <input
@@ -1028,7 +1054,7 @@ function ExamBuilderTab({ showToast }) {
             <p className="form-hint">
               A comprehensive essay question with an assessment matrix. The AI will generate the question and marking rubric.
             </p>
-            
+
             <div className="topic-input-group">
               <label>Essay Topic</label>
               <input
@@ -1075,7 +1101,7 @@ function ExamBuilderTab({ showToast }) {
                 </>
               )}
             </button>
-            
+
             {generationProgress && (
               <div className="generation-progress">
                 <Loader size={16} className="spin" />
@@ -1093,7 +1119,7 @@ function ExamBuilderTab({ showToast }) {
             <FileCheck size={22} />
             Generated Exam Set
           </h2>
-          
+
           <div className="exam-set-container">
             {/* First Opportunity */}
             {generatedExam.first_opportunity && (
@@ -1319,18 +1345,18 @@ function App() {
   const [toasts, setToasts] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedAssessment, setSelectedAssessment] = useState(null);
-  
+
   // Live progress state
   const [liveJob, setLiveJob] = useState(null);
   const [liveProgress, setLiveProgress] = useState(null);
-  
+
   // eFundi state
   const [efundiAuth, setEfundiAuth] = useState(null);
   const [efundiUsername, setEfundiUsername] = useState('');
   const [efundiPassword, setEfundiPassword] = useState('');
   const [assignmentUrl, setAssignmentUrl] = useState('');
   const [assignmentName, setAssignmentName] = useState('');
-  
+
   // Assignment instructions state
   const [assignmentInstructions, setAssignmentInstructions] = useState('');
   const [instructionsFile, setInstructionsFile] = useState(null);
@@ -1387,7 +1413,7 @@ function App() {
     loadJobs();
     loadAssessments();
     checkEfundiAuth();
-    
+
     // Poll jobs every 5 seconds
     const interval = setInterval(loadJobs, 5000);
     return () => clearInterval(interval);
@@ -1400,7 +1426,7 @@ function App() {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('name', file.name.replace(/\.[^.]+$/, ''));
-      
+
       const result = await api.post('/api/rubric/upload', formData, true);
       showToast(`Rubric "${result.rubric.name}" uploaded successfully!`, 'success');
       loadRubrics();
@@ -1418,7 +1444,7 @@ function App() {
       const formData = new FormData();
       formData.append('name', 'Essay Assessment Rubric (50 marks)');
       formData.append('total_marks', '50');
-      
+
       const result = await api.post('/api/rubric/essay-default', formData, true);
       showToast(`Default rubric "${result.rubric.name}" created!`, 'success');
       loadRubrics();
@@ -1436,7 +1462,7 @@ function App() {
       showToast('Please enter username and password', 'error');
       return;
     }
-    
+
     setIsLoading(true);
     try {
       const result = await api.post('/api/efundi/authenticate', {
@@ -1463,7 +1489,7 @@ function App() {
       showToast('Please enter the eFundi assignment URL', 'error');
       return;
     }
-    
+
     setIsLoading(true);
     try {
       const result = await api.post('/api/efundi/download-and-assess', {
@@ -1506,7 +1532,7 @@ function App() {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('rubric_id', selectedRubric._id);
-      
+
       // Add instructions if provided
       if (assignmentInstructions) {
         formData.append('instructions', assignmentInstructions);
@@ -1514,7 +1540,7 @@ function App() {
       if (instructionsFile) {
         formData.append('instructions_file', instructionsFile);
       }
-      
+
       const result = await api.post('/api/assess/single', formData, true);
       showToast(`Assessment complete! Score: ${result.total_score?.toFixed(1)}/${result.max_score}`, 'success');
       setSelectedAssessment(result);
@@ -1538,7 +1564,7 @@ function App() {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('rubric_id', selectedRubric._id);
-      
+
       // Add instructions if provided
       if (assignmentInstructions) {
         formData.append('instructions', assignmentInstructions);
@@ -1546,26 +1572,26 @@ function App() {
       if (instructionsFile) {
         formData.append('instructions_file', instructionsFile);
       }
-      
+
       const result = await api.post('/api/assess/bulk', formData, true);
       showToast(`Bulk assessment started! Job ID: ${result.job_id}`, 'success');
-      
+
       // Start live monitoring
       setLiveJob(result.job_id);
       setLiveProgress({ status: 'starting', progress: 0, total: 0 });
-      
+
       // Poll for updates
       const pollInterval = setInterval(async () => {
         try {
           const jobData = await api.get(`/api/job/${result.job_id}`);
           setLiveProgress(jobData);
-          
+
           if (jobData.status === 'completed' || jobData.status === 'failed') {
             clearInterval(pollInterval);
             setLiveJob(null);
             setLiveProgress(null);
             loadJobs();
-            
+
             if (jobData.status === 'completed') {
               showToast(`Assessment complete! ${jobData.results?.submissions_processed || 0} submissions processed.`, 'success');
               setActiveTab('jobs');
@@ -1577,7 +1603,7 @@ function App() {
           console.error('Poll error:', e);
         }
       }, 2000);
-      
+
     } catch (error) {
       if (error.message === 'Failed to fetch') {
         showToast('Upload failed: Network error. Please check your connection and try again. If uploading a large file, it may have timed out.', 'error');
@@ -1595,7 +1621,7 @@ function App() {
       showToast('Starting download...', 'info');
       const response = await fetch(`${API_URL}/api/download/${jobId}`);
       if (!response.ok) throw new Error('Download failed');
-      
+
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -1613,7 +1639,7 @@ function App() {
 
   // View job results with per-student breakdown
   const [selectedJob, setSelectedJob] = useState(null);
-  
+
   const handleViewJobDetails = (job) => {
     setSelectedJob(job);
   };
@@ -1659,7 +1685,7 @@ function App() {
 
       {/* Navigation */}
       <nav className="nav">
-        <button 
+        <button
           className={`nav-btn ${activeTab === 'assess' ? 'nav-btn-active' : ''}`}
           onClick={() => setActiveTab('assess')}
           data-testid="nav-assess"
@@ -1667,7 +1693,7 @@ function App() {
           <FileText size={18} />
           Assess
         </button>
-        <button 
+        <button
           className={`nav-btn ${activeTab === 'exam-builder' ? 'nav-btn-active' : ''}`}
           onClick={() => setActiveTab('exam-builder')}
           data-testid="nav-exam-builder"
@@ -1675,7 +1701,7 @@ function App() {
           <PenTool size={18} />
           Exam Builder
         </button>
-        <button 
+        <button
           className={`nav-btn ${activeTab === 'rubrics' ? 'nav-btn-active' : ''}`}
           onClick={() => setActiveTab('rubrics')}
           data-testid="nav-rubrics"
@@ -1683,7 +1709,7 @@ function App() {
           <BookOpen size={18} />
           Rubrics
         </button>
-        <button 
+        <button
           className={`nav-btn ${activeTab === 'jobs' ? 'nav-btn-active' : ''}`}
           onClick={() => setActiveTab('jobs')}
           data-testid="nav-jobs"
@@ -1731,7 +1757,7 @@ function App() {
               <p className="section-description">
                 Provide the assignment task/instructions so the AI knows what students were supposed to do.
               </p>
-              
+
               <div className="instructions-container">
                 <div className="instructions-upload">
                   <FileDropzone
@@ -1757,7 +1783,7 @@ function App() {
                     <div className="file-loaded-badge">
                       <CheckCircle size={16} />
                       <span>{instructionsFile.name}</span>
-                      <button 
+                      <button
                         className="clear-btn"
                         onClick={() => { setInstructionsFile(null); setAssignmentInstructions(''); }}
                       >
@@ -1766,11 +1792,11 @@ function App() {
                     </div>
                   )}
                 </div>
-                
+
                 <div className="instructions-divider">
                   <span>OR</span>
                 </div>
-                
+
                 <div className="instructions-text">
                   <textarea
                     className="instructions-textarea"
@@ -1791,7 +1817,7 @@ Part C: Reflect on how your improvements enhance historical thinking skills"
                   />
                 </div>
               </div>
-              
+
               {assignmentInstructions && (
                 <div className="instructions-preview">
                   <h4>Instructions Preview:</h4>
@@ -1806,7 +1832,7 @@ Part C: Reflect on how your improvements enhance historical thinking skills"
                 <Globe size={22} />
                 eFundi Automation
               </h2>
-              
+
               <div className="efundi-container">
                 {/* Authentication Status */}
                 <div className="efundi-auth-status">
@@ -1876,7 +1902,7 @@ Part C: Reflect on how your improvements enhance historical thinking skills"
                         data-testid="assignment-name"
                       />
                     </div>
-                    <button 
+                    <button
                       className="automate-btn"
                       onClick={handleEfundiAutomate}
                       disabled={!selectedRubric || !assignmentUrl}
@@ -1961,7 +1987,7 @@ Part C: Reflect on how your improvements enhance historical thinking skills"
                   icon={BookOpen}
                 />
                 <div className="or-divider">OR</div>
-                <button 
+                <button
                   className="create-default-btn"
                   onClick={handleCreateDefaultRubric}
                   data-testid="create-default-rubric"

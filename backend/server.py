@@ -3,31 +3,54 @@ Smart Assessor - AI-Powered Assignment Assessment System
 FastAPI Backend with OpenAI GPT Integration
 """
 
-import os
-import io
-import re
-import csv
-import json
-import zipfile
-import tempfile
-import shutil
 import asyncio
-from pathlib import Path
-from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional
 from contextlib import asynccontextmanager
+import csv
+from datetime import datetime, timezone
+import io
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import tempfile
+from typing import Any, Dict, List, Optional
+import zipfile
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from bson import ObjectId
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from openai import OpenAI
 from pydantic import BaseModel
-from dotenv import load_dotenv
 from pymongo import MongoClient
-from bson import ObjectId
+
+
+def sanitize_for_json(data: Any) -> Any:
+    """
+    Recursively clean objects to ensure strict JSON serialization compliance.
+    :param data:
+    """
+    if isinstance(data, dict):
+        return {k: sanitize_for_json(v) for k, v in data.items()}
+    elif isinstance(data, (list, tuple, set)):
+        return [sanitize_for_json(item) for item in data]
+    elif isinstance(data, ObjectId):
+        return str(data)
+    elif hasattr(data, "__dict__"):
+        return sanitize_for_json(data.__dict__)
+    try:
+        json.dumps(data)
+        return data
+    except TypeError:
+        return str(data)
+
 
 # Playwright for eFundi automation
 try:
     from playwright.async_api import async_playwright
+
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
@@ -35,27 +58,31 @@ except ImportError:
 load_dotenv()
 
 # OpenAI client
-from openai import OpenAI
 
-openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+openai_client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY")
+)
 
 # Document processing imports
 try:
     from docx import Document
-    from docx.shared import Pt, RGBColor
     from docx.enum.text import WD_COLOR_INDEX
+    from docx.shared import Pt, RGBColor
+
     DOCX_AVAILABLE = True
 except ImportError:
     DOCX_AVAILABLE = False
 
 try:
     import PyPDF2
+
     PDF_AVAILABLE = True
 except ImportError:
     PDF_AVAILABLE = False
 
 try:
     import fitz  # PyMuPDF
+
     PYMUPDF_AVAILABLE = True
 except ImportError:
     PYMUPDF_AVAILABLE = False
@@ -98,13 +125,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ===================== MODELS =====================
+
 
 class RubricCriterion(BaseModel):
     name: str
     weight: float
-    levels: Dict[str, Dict[str, Any]]  # level_name -> {description, min_score, max_score}
+    levels: Dict[
+        str, Dict[str, Any]
+    ]  # level_name -> {description, min_score, max_score}
 
 
 class Rubric(BaseModel):
@@ -122,15 +151,15 @@ class AssessmentResult(BaseModel):
     feedback: str
     annotations: List[Dict[str, Any]]
 
-
 # ===================== DOCUMENT PARSING =====================
+
 
 def extract_text_from_docx(file_path: Path) -> str:
     """Extract text from a DOCX file."""
     if not DOCX_AVAILABLE:
         # Fallback: extract from zip XML
         return _extract_docx_text_fallback(file_path)
-    
+
     try:
         doc = Document(str(file_path))
         paragraphs = []
@@ -154,10 +183,10 @@ def extract_text_from_docx(file_path: Path) -> str:
 def _extract_docx_text_fallback(file_path: Path) -> str:
     """Fallback XML-based DOCX text extraction."""
     with zipfile.ZipFile(file_path) as z:
-        xml = z.read('word/document.xml').decode('utf-8', errors='ignore')
-    text = re.sub(r'<w:tab/>', '\t', xml)
-    text = re.sub(r'</w:p>', '\n', text)
-    text = re.sub(r'<[^>]+>', '', text)
+        xml = z.read("word/document.xml").decode("utf-8", errors="ignore")
+    text = re.sub(r"<w:tab/>", "\t", xml)
+    text = re.sub(r"</w:p>", "\n", text)
+    text = re.sub(r"<[^>]+>", "", text)
     return text
 
 
@@ -165,9 +194,9 @@ def extract_text_from_pdf(file_path: Path) -> str:
     """Extract text from a PDF file."""
     if not PDF_AVAILABLE:
         return ""
-    
+
     text_parts = []
-    with open(file_path, 'rb') as f:
+    with open(file_path, "rb") as f:
         reader = PyPDF2.PdfReader(f)
         for page in reader.pages:
             text_parts.append(page.extract_text() or "")
@@ -177,21 +206,21 @@ def extract_text_from_pdf(file_path: Path) -> str:
 def extract_document_content(file_path: Path) -> str:
     """Extract text content from a document (PDF or DOCX)."""
     suffix = file_path.suffix.lower()
-    if suffix == '.docx':
+    if suffix == ".docx":
         return extract_text_from_docx(file_path)
-    elif suffix == '.pdf':
+    elif suffix == ".pdf":
         return extract_text_from_pdf(file_path)
-    elif suffix == '.txt':
-        return file_path.read_text(encoding='utf-8', errors='ignore')
+    elif suffix == ".txt":
+        return file_path.read_text(encoding="utf-8", errors="ignore")
     else:
         return ""
 
-
 # ===================== RUBRIC PARSING =====================
+
 
 async def ai_parse_rubric(text: str, file_name: str) -> Dict[str, Any]:
     """Use AI to parse rubric from text when standard parsing fails."""
-    
+
     system_prompt = """You are an expert at parsing academic rubrics. Extract the rubric structure from the provided text.
 
 CRITICAL INSTRUCTIONS FOR EXTRACTING MARKS:
@@ -246,167 +275,152 @@ IMPORTANT:
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,  # Lower temperature for more consistent parsing
             max_tokens=3000,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
-        
-        result = json.loads(response.choices[0].message.content)
-        
+
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("AI response content is None")
+        result = json.loads(content)
+
         # Post-process: Validate and fix total_marks
         if result.get("criteria"):
             calculated_total = sum(c.get("weight", 0) for c in result["criteria"])
-            
+
             # If any criterion has suspiciously low weight (< 5), log warning
             for c in result["criteria"]:
-                if c.get("weight", 0) < 5 and "introduction" not in c.get("name", "").lower():
-                    print(f"[Rubric Parse Warning] Low weight detected: {c.get('name')}: {c.get('weight')}")
-            
+                if (
+                    c.get("weight", 0) < 5
+                    and "introduction" not in c.get("name", "").lower()
+                ):
+                    print(
+                        f"[Rubric Parse Warning] Low weight detected: {c.get('name')}: {c.get('weight')}"
+                    )
+
             # Update total if mismatched
             if abs(result.get("total_marks", 0) - calculated_total) > 0.5:
-                print(f"[Rubric Parse] Correcting total: {result.get('total_marks')} -> {calculated_total}")
+                print(
+                    f"[Rubric Parse] Correcting total: {result.get('total_marks')} -> {calculated_total}"
+                )
                 result["total_marks"] = calculated_total
-        
+
         return result
-        
+
     except Exception as e:
         print(f"[AI Rubric Parse Error] {e}")
-        return None
+        # Return an empty dict so the return type matches Dict[str, Any]
+        return {}
 
 
-def parse_essay_matrix_from_docx(file_path: Path) -> Dict[str, Any]:
-    """Parse an essay assessment matrix/rubric from a DOCX file."""
-    if not DOCX_AVAILABLE:
+# 1. Make this function async
+async def parse_essay_matrix_from_docx(file_path: Path) -> Dict[str, Any]:
+    """Parse an essay assessment matrix/rubric from a document file safely supporting multiple formats."""
+    suffix = file_path.suffix.lower()
+
+    if suffix != ".docx" or not DOCX_AVAILABLE:
         text = extract_document_content(file_path)
         text_rubric = parse_rubric_from_text(text)
-        return _enrich_rubric_with_ai_if_needed(text_rubric, text, file_path.name)
-    
-    doc = Document(str(file_path))
-    rubric_data = {
-        "name": file_path.stem,
-        "total_marks": 0,
-        "criteria": []
-    }
-    
-    # Try to extract from tables (typical rubric format)
-    for table in doc.tables:
-        if len(table.rows) < 2:
-            continue
-        
-        # Get headers (performance levels)
-        header_row = table.rows[0]
-        levels = []
-        for i, cell in enumerate(header_row.cells):
-            cell_text = cell.text.strip()
-            if i > 0 and cell_text:  # Skip first column (criteria names)
-                levels.append(cell_text)
-        
-        # Parse each criterion row
-        for row in table.rows[1:]:
-            if len(row.cells) < 2:
+        # Added await here
+        return _enrich_rubric_with_ai_if_needed(
+            text_rubric,
+            text,
+            file_path.name,
+        )
+    try:
+        doc = Document(str(file_path))
+        rubric_data = {"name": file_path.stem, "total_marks": 0, "criteria": []}
+
+        for table in doc.tables:
+            if len(table.rows) < 2:
                 continue
-            
-            criterion_name = row.cells[0].text.strip()
-            if not criterion_name:
-                continue
-            # Skip obvious non-criterion rows from noisy table exports.
-            if criterion_name.lower() in {"criterion", "criteria", "levels", "performance level"}:
-                continue
-            if len(criterion_name) < 2 or not re.search(r"[A-Za-z]", criterion_name):
-                continue
-            
-            # Extract marks from criterion name if present (e.g., "Thesis [10 marks]")
-            marks_match = re.search(r'\[?\(?\s*(\d+)\s*(?:marks?|pts?|points?)?\s*\)?\]?', criterion_name, re.I)
-            weight = float(marks_match.group(1)) if marks_match else 10.0
-            criterion_name = re.sub(r'\s*\[?\(?\s*\d+\s*(?:marks?|pts?|points?)?\s*\)?\]?\s*$', '', criterion_name, flags=re.I).strip()
-            
-            criterion = {
-                "name": criterion_name,
-                "weight": weight,
-                "levels": {}
-            }
-            
-            for i, cell in enumerate(row.cells[1:]):
-                if i < len(levels):
-                    level_name = levels[i]
-                    description = cell.text.strip()
-                    
-                    # Extract score range from level name or description
-                    score_match = re.search(r'(\d+(?:\.\d+)?)\s*[-–to]\s*(\d+(?:\.\d+)?)', level_name)
-                    if score_match:
-                        min_score = float(score_match.group(1))
-                        max_score = float(score_match.group(2))
-                    else:
-                        # Default scoring based on level position
-                        total_levels = len(levels)
-                        min_score = (total_levels - i - 1) / total_levels * weight
-                        max_score = (total_levels - i) / total_levels * weight
-                    
-                    criterion["levels"][level_name] = {
-                        "description": description,
-                        "min_score": min_score,
-                        "max_score": max_score
-                    }
-            
-            if criterion["levels"]:
-                rubric_data["criteria"].append(criterion)
-                rubric_data["total_marks"] += weight
-    
-    # If no tables found, try text-based extraction first
-    if not rubric_data["criteria"]:
+            header_row = table.rows[0]
+            levels = [
+                cell.text.strip()
+                for i, cell in enumerate(header_row.cells)
+                if i > 0 and cell.text.strip()
+            ]
+
+            for row in table.rows[1:]:
+                if len(row.cells) < 2:
+                    continue
+                criterion_name = row.cells[0].text.strip()
+                if not criterion_name or criterion_name.lower() in {
+                    "criterion",
+                    "criteria",
+                    "levels",
+                    "performance level",
+                }:
+                    continue
+                if len(criterion_name) < 2 or not re.search(
+                    r"[A-Za-z]", criterion_name
+                ):
+                    continue
+
+                marks_match = re.search(
+                    r"\[?\(?\s*(\d+)\s*(?:marks?|pts?|points?)?\s*\)?\]?",
+                    criterion_name,
+                    re.I,
+                )
+                weight = float(marks_match.group(1)) if marks_match else 10.0
+                criterion_name = re.sub(
+                    r"\s*\[?\(?\s*\d+\s*(?:marks?|pts?|points?)?\s*\)?\]?\s*$",
+                    "",
+                    criterion_name,
+                    flags=re.I,
+                ).strip()
+
+                criterion = {"name": criterion_name, "weight": weight, "levels": {}}
+
+                for i, cell in enumerate(row.cells[1:]):
+                    if i < len(levels):
+                        level_name = levels[i]
+                        description = cell.text.strip()
+                        score_match = re.search(
+                            r"(\d+(?:\.\d+)?)\s*[-–to]\s*(\d+(?:\.\d+)?)", level_name
+                        )
+                        if score_match:
+                            min_score = float(score_match.group(1))
+                            max_score = float(score_match.group(2))
+                        else:
+                            total_levels = len(levels)
+                            min_score = (total_levels - i - 2) / total_levels * weight
+                            max_score = (total_levels - i) / total_levels * weight
+
+                        criterion["levels"][level_name] = {
+                            "description": description,
+                            "min_score": min_score,
+                            "max_score": max_score,
+                        }
+
+                if criterion["levels"]:
+                    rubric_data["criteria"].append(criterion)
+                    rubric_data["total_marks"] += weight
+
+        if not rubric_data["criteria"]:
+            text = extract_document_content(file_path)
+            text_rubric = parse_rubric_from_text(text)
+            # Added await here
+            return _enrich_rubric_with_ai_if_needed(
+                text_rubric, text, file_path.name
+            )
+
+        text = extract_document_content(file_path)
+        # Added await here
+        return _enrich_rubric_with_ai_if_needed(rubric_data, text, file_path.name)
+
+    except Exception as e:
+        print(f"[DOCX Parse Error fallback to AI] {e}")
         text = extract_document_content(file_path)
         text_rubric = parse_rubric_from_text(text)
+        # Added await here
         return _enrich_rubric_with_ai_if_needed(text_rubric, text, file_path.name)
 
-    # Even when table parsing succeeds, fall back to AI if extraction looks too generic.
-    text = extract_document_content(file_path)
-    return _enrich_rubric_with_ai_if_needed(rubric_data, text, file_path.name)
 
-
-def _rubric_parse_looks_weak(rubric_data: Dict[str, Any]) -> bool:
-    """Detect low-quality rubric parses that should be AI-enriched."""
-    criteria = rubric_data.get("criteria") or []
-    if not criteria:
-        return True
-
-    generic_descs = {
-        "outstanding performance",
-        "above average performance",
-        "meets basic requirements",
-        "below expectations",
-    }
-
-    level_count = 0
-    generic_count = 0
-    weak_name_count = 0
-    meaningful_desc_count = 0
-
-    for c in criteria:
-        name = (c.get("name") or "").strip()
-        if len(name) < 3 or not re.search(r"[A-Za-z]{2,}", name):
-            weak_name_count += 1
-
-        for level in (c.get("levels") or {}).values():
-            level_count += 1
-            desc = (level.get("description") or "").strip()
-            if desc.lower() in generic_descs:
-                generic_count += 1
-            if len(desc) >= 30 and re.search(r"[A-Za-z]{4,}", desc):
-                meaningful_desc_count += 1
-
-    if weak_name_count > 0:
-        return True
-    if level_count == 0:
-        return True
-    if generic_count / max(level_count, 1) >= 0.4:
-        return True
-    if meaningful_desc_count == 0:
-        return True
-    return False
-
-
+# 2. Make this function async and clean up the event loop logic
 def _enrich_rubric_with_ai_if_needed(
     rubric_data: Dict[str, Any],
     extracted_text: str,
@@ -434,67 +448,84 @@ def _enrich_rubric_with_ai_if_needed(
     return rubric_data
 
 
+
 def parse_rubric_from_text(text: str) -> Dict[str, Any]:
     """Parse rubric from plain text."""
-    rubric_data = {
-        "name": "Extracted Rubric",
-        "total_marks": 0,
-        "criteria": []
-    }
-    
-    lines = text.strip().split('\n')
-    
+    rubric_data = {"name": "Extracted Rubric", "total_marks": 0, "criteria": []}
+
+    lines = text.strip().split("\n")
+
     # Look for criteria patterns
     for line in lines:
         line = line.strip()
         if not line:
             continue
-        
+
         # Pattern: "Criterion Name [X marks]" or "Criterion Name (X)"
-        match = re.match(r'^(.+?)\s*[\[\(]?\s*(\d+)\s*(?:marks?|pts?|points?)?\s*[\]\)]?\s*$', line, re.I)
+        match = re.match(
+            r"^(.+?)\s*[\[\(]?\s*(\d+)\s*(?:marks?|pts?|points?)?\s*[\]\)]?\s*$",
+            line,
+            re.I,
+        )
         if match:
             name = match.group(1).strip()
             weight = float(match.group(2))
-            
+
             criterion = {
                 "name": name,
                 "weight": weight,
                 "levels": {
-                    "Excellent": {"description": "Outstanding performance", "min_score": weight * 0.8, "max_score": weight},
-                    "Good": {"description": "Above average performance", "min_score": weight * 0.6, "max_score": weight * 0.79},
-                    "Satisfactory": {"description": "Meets basic requirements", "min_score": weight * 0.4, "max_score": weight * 0.59},
-                    "Needs Improvement": {"description": "Below expectations", "min_score": 0, "max_score": weight * 0.39}
-                }
+                    "Excellent": {
+                        "description": "Outstanding performance",
+                        "min_score": weight * 0.8,
+                        "max_score": weight,
+                    },
+                    "Good": {
+                        "description": "Above average performance",
+                        "min_score": weight * 0.6,
+                        "max_score": weight * 0.79,
+                    },
+                    "Satisfactory": {
+                        "description": "Meets basic requirements",
+                        "min_score": weight * 0.4,
+                        "max_score": weight * 0.59,
+                    },
+                    "Needs Improvement": {
+                        "description": "Below expectations",
+                        "min_score": 0,
+                        "max_score": weight * 0.39,
+                    },
+                },
             }
             rubric_data["criteria"].append(criterion)
             rubric_data["total_marks"] += weight
-    
-    return rubric_data
 
+    return rubric_data
 
 # ===================== AI ASSESSMENT =====================
 
+
 async def assess_with_ai(
-    submission_text: str,
-    rubric: Dict[str, Any],
-    assignment_instructions: str = ""
+    submission_text: str, rubric: Dict[str, Any], assignment_instructions: str=""
 ) -> Dict[str, Any]:
     """Use GPT to assess a submission against a rubric."""
-    
+
     # Build rubric description for the prompt
     rubric_description = f"Total Marks: {rubric.get('total_marks', 100)}\n\nCriteria:\n"
     for criterion in rubric.get("criteria", []):
-        rubric_description += f"\n### {criterion['name']} (Weight: {criterion['weight']} marks)\n"
+        rubric_description += (
+            f"\n### {criterion['name']} (Weight: {criterion['weight']} marks)\n"
+        )
         for level_name, level_data in criterion.get("levels", {}).items():
             desc = level_data.get("description", "")
             min_s = level_data.get("min_score", 0)
             max_s = level_data.get("max_score", 0)
             rubric_description += f"  - {level_name} ({min_s}-{max_s}): {desc}\n"
-    
+
     # Add assignment context if available
     assignment_context = rubric.get("assignment_context", "")
     submission_requirements = rubric.get("submission_requirements", "")
-    
+
     system_prompt = """You are a RIGOROUS but FAIR academic assessor specializing in HISTORY EDUCATION and History pedagogy. Your task is to thoroughly evaluate student submissions against the provided rubric.
 
 SUBJECT-SPECIFIC FEEDBACK (HISTORY):
@@ -588,136 +619,174 @@ GRADING APPROACH:
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
             max_tokens=4000,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
-        
+
         result = json.loads(response.choices[0].message.content)
-        
+
         # Validate and recalculate total_score from criteria scores
         if result.get("criteria_scores"):
             calculated_total = sum(
-                data.get("score", 0) 
-                for data in result["criteria_scores"].values()
+                data.get("score", 0) for data in result["criteria_scores"].values()
             )
             # If AI's total is way off, use the calculated total
             ai_total = result.get("total_score", 0)
             if abs(ai_total - calculated_total) > 1:
-                print(f"[Score Fix] AI total {ai_total} -> calculated {calculated_total}")
+                print(
+                    f"[Score Fix] AI total {ai_total} -> calculated {calculated_total}"
+                )
                 result["total_score"] = calculated_total
-        
+
         return result
-        
-    except Exception as e:
+
+    except (
+        Exception
+    ) as e:  # noqa: BLE001  # Broad exception is intentional to guard API/JSON failures
         print(f"[AI Assessment Error] {e}")
         return {
             "error": str(e),
             "total_score": 0,
             "criteria_scores": {},
             "overall_feedback": "Assessment failed due to an error.",
-            "annotations": []
+            "annotations": [],
         }
 
-
 # ===================== DOCUMENT ANNOTATION =====================
+
 
 def annotate_docx_with_feedback(
     original_path: Path,
     output_path: Path,
     annotations: List[Dict[str, Any]],
     overall_feedback: str,
-    criteria_scores: Dict[str, Any] = None,
+    criteria_scores: Dict[str, Any],
     total_score: float = 0,
     total_possible: float = 100,
-    strengths: List[str] = None,
-    improvements: List[str] = None
+    strengths: List[str] | None = None,
 ) -> bool:
-    """Add comprehensive annotations to a DOCX document with front page summary and inline comments."""
+    """
+    Add comprehensive annotations to a DOCX document with front page summary and inline comments.
+    :param original_path:
+    :param output_path:
+    :param annotations:
+    :param overall_feedback:
+    :param criteria_scores:
+    :param total_possible:
+    :param strengths:
+    :param improvements:
+"""
     if not DOCX_AVAILABLE:
         return False
-    
+
     try:
         doc = Document(str(original_path))
-        
+
         # Calculate percentage
         percentage = (total_score / total_possible * 100) if total_possible > 0 else 0
         pass_fail = "PASS" if percentage >= 50 else "FAIL"
         grade_symbol = "✓" if percentage >= 50 else "✗"
-        
+
         # Colors
         GREEN = RGBColor(0, 128, 0)
         RED = RGBColor(200, 0, 0)
         BLUE = RGBColor(0, 0, 150)
         ORANGE = RGBColor(200, 100, 0)
         grade_color = GREEN if percentage >= 50 else RED
-        
+
         # === FRONT PAGE: ASSESSMENT SUMMARY ===
         if doc.paragraphs:
             first_para = doc.paragraphs[0]
             summary_para = first_para.insert_paragraph_before("")
         else:
             summary_para = doc.add_paragraph()
-        
+
         # Header box with score
         box_top = summary_para.add_run("┌" + "─" * 60 + "┐\n")
         box_top.font.color.rgb = BLUE
         box_top.font.bold = True
-        
-        title_line = summary_para.add_run("│" + "  ASSESSMENT FEEDBACK".center(60) + "│\n")
+
+        title_line = summary_para.add_run(
+            "│" + "  ASSESSMENT FEEDBACK".center(60) + "│\n"
+        )
         title_line.font.color.rgb = BLUE
         title_line.font.bold = True
         title_line.font.size = Pt(14)
-        
-        score_text = f"│  {grade_symbol} SCORE: {total_score:.1f}/{total_possible} ({percentage:.1f}%) - {pass_fail}  {grade_symbol}".ljust(61) + "│\n"
+
+        score_text = (
+            f"│  {grade_symbol} SCORE: {total_score:.1f}/{total_possible} ({percentage:.1f}%) - {pass_fail}  {grade_symbol}".ljust(
+                61
+            )
+            +"│\n"
+        )
         score_run = summary_para.add_run(score_text)
         score_run.font.color.rgb = grade_color
         score_run.font.bold = True
         score_run.font.size = Pt(12)
-        
+
         box_bottom = summary_para.add_run("└" + "─" * 60 + "┘\n\n")
         box_bottom.font.color.rgb = BLUE
         box_bottom.font.bold = True
-        
+
         # Criteria breakdown
         if criteria_scores:
             criteria_header = summary_para.add_run("CRITERIA BREAKDOWN:\n")
             criteria_header.font.color.rgb = BLUE
             criteria_header.font.bold = True
             criteria_header.font.size = Pt(11)
-            
+
             for crit_name, crit_data in criteria_scores.items():
                 score = crit_data.get("score", 0)
                 level = crit_data.get("level", "N/A")
                 # Determine tick/cross based on level
-                crit_symbol = "✓" if "excellent" in level.lower() or "proficient" in level.lower() else "→" if "developing" in level.lower() else "✗"
-                crit_color = GREEN if crit_symbol == "✓" else ORANGE if crit_symbol == "→" else RED
-                
-                crit_line = summary_para.add_run(f"  {crit_symbol} {crit_name}: {score} ({level})\n")
+                crit_symbol = (
+                    "✓"
+                    if "excellent" in level.lower() or "proficient" in level.lower()
+                    else "→" if "developing" in level.lower() else "✗"
+                )
+                crit_color = (
+                    GREEN
+                    if crit_symbol == "✓"
+                    else ORANGE if crit_symbol == "→" else RED
+                )
+
+                crit_line = summary_para.add_run(
+                    f"  {crit_symbol} {crit_name}: {score} ({level})\n"
+                )
                 crit_line.font.color.rgb = crit_color
                 crit_line.font.size = Pt(10)
-        
+
         summary_para.add_run("\n")
-        
+
         # Quick feedback summary
         feedback_header = summary_para.add_run("SUMMARY FEEDBACK:\n")
         feedback_header.font.color.rgb = BLUE
         feedback_header.font.bold = True
-        
+
         # Truncate feedback to ~300 chars for summary
-        short_feedback = overall_feedback[:400] + "..." if len(overall_feedback) > 400 else overall_feedback
+        short_feedback = (
+            overall_feedback[:400] + "..."
+            if len(overall_feedback) > 400
+            else overall_feedback
+        )
         feedback_text = summary_para.add_run(short_feedback + "\n\n")
         feedback_text.font.color.rgb = RGBColor(80, 80, 80)
         feedback_text.font.size = Pt(10)
         feedback_text.font.italic = True
-        
+
         # Separator before original content
-        separator = summary_para.add_run("─" * 62 + "\nORIGINAL SUBMISSION WITH ANNOTATIONS BELOW\n" + "─" * 62 + "\n\n")
+        separator = summary_para.add_run(
+            "─" * 62
+            +"\nORIGINAL SUBMISSION WITH ANNOTATIONS BELOW\n"
+            +"─" * 62
+            +"\n\n"
+        )
         separator.font.color.rgb = BLUE
         separator.font.bold = True
-        
+
         # === INLINE ANNOTATIONS ===
         # Build lookup dictionary for matching quotes
         annotation_lookup = {}
@@ -732,27 +801,27 @@ def annotate_docx_with_feedback(
                     "quote": quote,
                     "comment": ann.get("comment", ""),
                     "type": ann.get("type", "suggestion"),
-                    "used": False
+                    "used": False,
                 }
                 if key_med != key_short:
                     annotation_lookup[key_med] = annotation_lookup[key_short]
-        
+
         # Process each paragraph and add inline comments
         for para in doc.paragraphs:
             if para == summary_para:
                 continue
-            
+
             para_text_lower = para.text.lower()
-            
+
             # Try to find matching annotations
             for key, ann_data in annotation_lookup.items():
                 if ann_data["used"]:
                     continue
-                
+
                 if key in para_text_lower:
                     # Found match - add inline comment
                     ann_type = ann_data["type"]
-                    
+
                     # Symbols and colors based on type
                     if ann_type == "praise":
                         symbol = "✓"
@@ -763,25 +832,28 @@ def annotate_docx_with_feedback(
                     else:  # suggestion, question
                         symbol = "→"
                         color = ORANGE
-                    
+
                     # Add comment after paragraph
-                    comment_text = f"\n   [{symbol} #{ann_data['num']}] {ann_data['comment']}"
+                    comment_text = (
+                        f"\n   [{symbol} #{ann_data['num']}] {ann_data['comment']}"
+                    )
                     comment_run = para.add_run(comment_text)
                     comment_run.font.color.rgb = color
                     comment_run.font.size = Pt(9)
                     comment_run.font.italic = True
-                    
+
                     ann_data["used"] = True
                     break
-        
+
         # Save
         doc.save(str(output_path))
         print(f"[Annotated DOCX] {output_path}")
         return True
-        
+
     except Exception as e:
         print(f"[DOCX Annotation Error] {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -790,80 +862,89 @@ def create_rubric_feedback_document(
     output_path: Path,
     rubric: Dict[str, Any],
     assessment: Dict[str, Any],
-    student_id: str
+    student_id: str,
 ) -> bool:
     """Create a filled-out rubric document showing scores for each criterion."""
     if not DOCX_AVAILABLE:
         return False
-    
+
     try:
         doc = Document()
-        
+
         # Title
         title = doc.add_heading(f"Assessment Rubric - Student {student_id}", 0)
         title.alignment = 1  # Center
-        
+
         # Score summary
         total_score = assessment.get("total_score", 0)
         total_marks = rubric.get("total_marks", 25)
         percentage = (total_score / total_marks * 100) if total_marks > 0 else 0
-        
+
         summary = doc.add_paragraph()
-        summary_run = summary.add_run(f"TOTAL SCORE: {total_score}/{total_marks} ({percentage:.1f}%)")
+        summary_run = summary.add_run(
+            f"TOTAL SCORE: {total_score}/{total_marks} ({percentage:.1f}%)"
+        )
         summary_run.font.bold = True
         summary_run.font.size = Pt(14)
         if percentage >= 50:
             summary_run.font.color.rgb = RGBColor(0, 128, 0)
         else:
             summary_run.font.color.rgb = RGBColor(255, 0, 0)
-        
+
         doc.add_paragraph()  # Spacer
-        
+
         # Add rubric table
         criteria_scores = assessment.get("criteria_scores", {})
-        
+
         for criterion in rubric.get("criteria", []):
             crit_name = criterion.get("name", "Unknown")
             crit_weight = criterion.get("weight", 0)
             levels = criterion.get("levels", {})
-            
+
             # Find the score for this criterion
             score_data = None
             for key, data in criteria_scores.items():
                 if crit_name.lower() in key.lower() or key.lower() in crit_name.lower():
                     score_data = data
                     break
-            
+
             actual_score = score_data.get("score", 0) if score_data else 0
             actual_level = score_data.get("level", "N/A") if score_data else "N/A"
             feedback = score_data.get("feedback", "") if score_data else ""
-            
+
             # Criterion header
-            crit_heading = doc.add_heading(f"{crit_name} ({crit_weight} marks)", level=2)
-            
+            crit_heading = doc.add_heading(
+                f"{crit_name} ({crit_weight} marks)", level=2
+            )
+
             # Create table for levels
             table = doc.add_table(rows=len(levels) + 1, cols=4)
-            table.style = 'Table Grid'
-            
+            table.style = "Table Grid"
+
             # Header row
             header_cells = table.rows[0].cells
             header_cells[0].text = "Level"
             header_cells[1].text = "Score Range"
             header_cells[2].text = "Description"
             header_cells[3].text = "Achieved"
-            
+
             for cell in header_cells:
                 cell.paragraphs[0].runs[0].font.bold = True
-            
+
             # Level rows
             for i, (level_name, level_data) in enumerate(levels.items()):
                 row = table.rows[i + 1]
                 row.cells[0].text = level_name
-                row.cells[1].text = f"{level_data.get('min_score', 0)}-{level_data.get('max_score', 0)}"
+                row.cells[1].text = (
+                    f"{level_data.get('min_score', 0)}-{level_data.get('max_score', 0)}"
+                )
                 row.cells[2].text = level_data.get("description", "")[:100]
-                
+
                 # Check if this is the achieved level
-                if level_name.lower() in actual_level.lower() or actual_level.lower() in level_name.lower():
+                if (
+                    level_name.lower() in actual_level.lower()
+                    or actual_level.lower() in level_name.lower()
+                ):
                     row.cells[3].text = f"✓ {actual_score}"
                     # Highlight this row
                     for cell in row.cells:
@@ -872,7 +953,7 @@ def create_rubric_feedback_document(
                                 run.font.bold = True
                 else:
                     row.cells[3].text = ""
-            
+
             # Add feedback below table
             if feedback:
                 feedback_para = doc.add_paragraph()
@@ -881,40 +962,41 @@ def create_rubric_feedback_document(
                 feedback_text = feedback_para.add_run(feedback)
                 feedback_text.font.italic = True
                 feedback_text.font.color.rgb = RGBColor(0, 0, 128)
-            
+
             doc.add_paragraph()  # Spacer
-        
+
         # Strengths and Areas for Improvement
         doc.add_heading("Summary", level=1)
-        
+
         strengths = assessment.get("strengths", [])
         if strengths:
             doc.add_heading("Strengths ✓", level=2)
             for s in strengths:
-                p = doc.add_paragraph(s, style='List Bullet')
+                p = doc.add_paragraph(s, style="List Bullet")
                 p.runs[0].font.color.rgb = RGBColor(0, 128, 0)
-        
+
         improvements = assessment.get("areas_for_improvement", [])
         if improvements:
             doc.add_heading("Areas for Improvement →", level=2)
             for imp in improvements:
-                p = doc.add_paragraph(imp, style='List Bullet')
+                p = doc.add_paragraph(imp, style="List Bullet")
                 p.runs[0].font.color.rgb = RGBColor(200, 100, 0)
-        
+
         # Overall feedback
         overall = assessment.get("overall_feedback", "")
         if overall:
             doc.add_heading("Overall Feedback", level=2)
             doc.add_paragraph(overall)
-        
+
         # Save
         doc.save(str(output_path))
         print(f"[Rubric Document] {output_path}")
         return True
-        
+
     except Exception as e:
         print(f"[Rubric Document Error] {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -949,12 +1031,12 @@ def create_feedback_txt(output_path: Path, assessment: Dict[str, Any]) -> bool:
         content.append("")
         content.append("ANNOTATIONS:")
         for i, ann in enumerate(assessment.get("annotations", [])):
-            content.append(f"\n  [{i+1}] ({ann.get('type', 'note').upper()})")
+            content.append(f"\n  [{i + 1}] ({ann.get('type', 'note').upper()})")
             content.append(f"      {ann.get('comment', '')}")
-            if ann.get('quote'):
-                content.append(f"      Re: \"{ann['quote'][:100]}...\"")
-        
-        output_path.write_text("\n".join(content), encoding='utf-8')
+            if ann.get("quote"):
+                content.append(f'      Re: "{ann["quote"][:100]}..."')
+
+        output_path.write_text("\n".join(content), encoding="utf-8")
         return True
     except Exception as e:
         print(f"[Feedback TXT Error] {e}")
@@ -966,26 +1048,26 @@ def annotate_pdf_with_feedback(
     output_path: Path,
     annotations: List[Dict[str, Any]],
     overall_feedback: str,
-    criteria_scores: Dict[str, Any] = None,
-    total_score: float = 0,
-    total_marks: float = 25
+    criteria_scores: Dict[str, Any]=None,
+    total_score: float=0,
+    total_marks: float=25,
 ) -> bool:
     """Annotate a PDF document with assessment feedback using PyMuPDF."""
-    
+
     if not PYMUPDF_AVAILABLE:
         print("[PDF Annotation] PyMuPDF not available, falling back to text feedback")
         return False
-    
+
     try:
         doc = fitz.open(str(original_path))
         first_page = doc[0]
         page_width = first_page.rect.width
-        
+
         percentage = (total_score / total_marks * 100) if total_marks > 0 else 0
         pass_fail = "PASS" if percentage >= 50 else "FAIL"
         symbol = "✓" if percentage >= 50 else "✗"
         score_color = (0, 0.5, 0) if percentage >= 50 else (0.8, 0, 0)
-        
+
         # === ADD SCORE BOX AT TOP OF FIRST PAGE ===
         # Draw background rectangle
         score_box = fitz.Rect(10, 10, page_width - 10, 90)
@@ -993,7 +1075,7 @@ def annotate_pdf_with_feedback(
         shape.draw_rect(score_box)
         shape.finish(color=(0, 0, 0.5), fill=(0.95, 0.95, 1), width=2)
         shape.commit()
-        
+
         # Add main score text
         score_text = f"{symbol} SCORE: {total_score:.1f}/{total_marks} ({percentage:.1f}%) - {pass_fail} {symbol}"
         first_page.insert_text(
@@ -1001,27 +1083,32 @@ def annotate_pdf_with_feedback(
             score_text,
             fontsize=16,
             color=score_color,
-            fontname="helv"
+            fontname="helv",
         )
-        
+
         # Add criteria summary below score
         y_pos = 55
         if criteria_scores:
-            for crit_name, crit_data in list(criteria_scores.items())[:3]:  # First 3 criteria
+            for crit_name, crit_data in list(criteria_scores.items())[:3
+            ]:  # First 3 criteria
                 score = crit_data.get("score", 0)
                 level = crit_data.get("level", "N/A")
-                crit_symbol = "✓" if "excellent" in level.lower() or "proficient" in level.lower() else "✗"
+                crit_symbol = (
+                    "✓"
+                    if "excellent" in level.lower() or "proficient" in level.lower()
+                    else "✗"
+                )
                 crit_color = (0, 0.5, 0) if crit_symbol == "✓" else (0.8, 0.4, 0)
-                
+
                 first_page.insert_text(
                     fitz.Point(20, y_pos),
                     f"{crit_symbol} {crit_name[:30]}: {score}",
                     fontsize=9,
                     color=crit_color,
-                    fontname="helv"
+                    fontname="helv",
                 )
                 y_pos += 12
-        
+
         # === ADD STICKY NOTE WITH FULL FEEDBACK ===
         full_feedback = f"""ASSESSMENT FEEDBACK
 ─────────────────────────
@@ -1034,20 +1121,18 @@ CRITERIA:
 """
         for crit_name, crit_data in (criteria_scores or {}).items():
             full_feedback += f"\n• {crit_name}: {crit_data.get('score', 0)} ({crit_data.get('level', 'N/A')})"
-        
+
         # Add main feedback sticky note
         first_page.add_text_annot(
-            fitz.Point(page_width - 30, 10),
-            full_feedback,
-            icon="Comment"
+            fitz.Point(page_width - 30, 10), full_feedback, icon="Comment"
         )
-        
+
         # === ADD ANNOTATIONS THROUGHOUT DOCUMENT ===
         for i, ann in enumerate(annotations):
             quote = ann.get("quote", "")
             comment = ann.get("comment", "")
             ann_type = ann.get("type", "suggestion")
-            
+
             # Determine icon based on type
             if ann_type == "praise":
                 icon = "Check"
@@ -1055,19 +1140,17 @@ CRITERIA:
                 icon = "Cross"
             else:
                 icon = "Note"
-            
+
             # Search for quote in all pages
             found = False
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                
+            for page_num, page in enumerate(doc):
                 # Search for the text
                 search_text = quote[:60] if len(quote) > 60 else quote
                 text_instances = page.search_for(search_text)
-                
+
                 if text_instances:
                     inst = text_instances[0]
-                    
+
                     # Add highlight annotation
                     highlight = page.add_highlight_annot(inst)
                     if ann_type == "praise":
@@ -1077,42 +1160,41 @@ CRITERIA:
                     else:
                         highlight.set_colors(stroke=(1, 1, 0.5))  # Yellow
                     highlight.update()
-                    
+
                     # Add comment annotation near the highlighted text
-                    ann_text = f"[{i+1}] {ann_type.upper()}\n{comment}"
+                    ann_text = f"[{i + 1}] {ann_type.upper()}\n{comment}"
                     page.add_text_annot(
-                        fitz.Point(inst.x1 + 5, inst.y0),
-                        ann_text,
-                        icon=icon
+                        fitz.Point(inst.x1 + 5, inst.y0), ann_text, icon=icon
                     )
                     found = True
                     break
-            
+
             if not found and i < 5:  # Add first 5 unfound annotations to first page
                 first_page.add_text_annot(
                     fitz.Point(page_width - 30, 100 + i * 20),
-                    f"[{i+1}] {ann_type.upper()}: {comment}",
-                    icon=icon
+                    f"[{i + 1}] {ann_type.upper()}: {comment}",
+                    icon=icon,
                 )
-        
+
         # Save
         doc.save(str(output_path))
         doc.close()
         print(f"[PDF Annotated] {output_path}")
         return True
-        
+
     except Exception as e:
         print(f"[PDF Annotation Error] {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
-
 # ===================== EFUNDI ZIP HANDLING =====================
+
 
 def extract_student_id(folder_name: str) -> Optional[str]:
     """Extract student ID from folder name like 'SURNAME, NAME(12345678)'."""
-    match = re.search(r'\((\d{5,})\)', folder_name)
+    match = re.search(r"\((\d{5,})\)", folder_name)
     return match.group(1) if match else None
 
 
@@ -1122,11 +1204,11 @@ def extract_group_member_ids(text: str, valid_student_ids: set) -> List[str]:
     Looks for 8-digit student numbers that exist in the valid_student_ids set.
     """
     # Find all 8-digit numbers in the text (typical student ID format)
-    potential_ids = re.findall(r'\b(\d{8})\b', text)
-    
+    potential_ids = re.findall(r"\b(\d{8})\b", text)
+
     # Filter to only include IDs that exist in the grades.csv
     group_ids = [sid for sid in potential_ids if sid in valid_student_ids]
-    
+
     # Remove duplicates while preserving order
     seen = set()
     unique_ids = []
@@ -1134,15 +1216,15 @@ def extract_group_member_ids(text: str, valid_student_ids: set) -> List[str]:
         if sid not in seen:
             seen.add(sid)
             unique_ids.append(sid)
-    
+
     return unique_ids
 
 
 def get_first_page_text(file_path: Path) -> str:
     """Extract text from approximately the first page of a document."""
     suffix = file_path.suffix.lower()
-    
-    if suffix == '.docx':
+
+    if suffix == ".docx":
         if not DOCX_AVAILABLE:
             return ""
         try:
@@ -1159,12 +1241,12 @@ def get_first_page_text(file_path: Path) -> str:
         except Exception as e:
             print(f"[First Page Extract Error] {e}")
             return ""
-    
-    elif suffix == '.pdf':
+
+    elif suffix == ".pdf":
         if not PDF_AVAILABLE:
             return ""
         try:
-            with open(file_path, 'rb') as f:
+            with open(file_path, "rb") as f:
                 reader = PyPDF2.PdfReader(f)
                 if len(reader.pages) > 0:
                     return reader.pages[0].extract_text() or ""
@@ -1172,7 +1254,7 @@ def get_first_page_text(file_path: Path) -> str:
         except Exception as e:
             print(f"[PDF First Page Error] {e}")
             return ""
-    
+
     return ""
 
 
@@ -1180,11 +1262,11 @@ async def process_efundi_zip(
     zip_path: Path,
     rubric: Dict[str, Any],
     output_dir: Path,
-    progress_callback: callable = None,
-    instructions: str = None
+    progress_callback: callable=None,
+    instructions: str=None,
 ) -> Dict[str, Any]:
     """Process an eFundi assignment zip file and assess all submissions."""
-    
+
     results = {
         "job_id": datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"),
         "submissions_processed": 0,
@@ -1193,23 +1275,23 @@ async def process_efundi_zip(
         "assessments": [],
         "current_student": None,
         "grades_csv_path": None,
-        "output_zip_path": None
+        "output_zip_path": None,
     }
-    
+
     temp_dir = Path(tempfile.mkdtemp(prefix="efundi_"))
-    
+
     try:
         # Extract zip
-        with zipfile.ZipFile(zip_path, 'r') as zf:
+        with zipfile.ZipFile(zip_path, "r") as zf:
             zf.extractall(temp_dir)
-        
+
         # Find root folder (e.g., "Assignment 1 /")
         contents = list(temp_dir.iterdir())
         if len(contents) == 1 and contents[0].is_dir():
             root_dir = contents[0]
         else:
             root_dir = temp_dir
-        
+
         # Find grades.csv and extract all valid student IDs
         grades_csv = None
         valid_student_ids = set()
@@ -1218,9 +1300,9 @@ async def process_efundi_zip(
                 grades_csv = f
                 # Extract all student IDs from the CSV
                 try:
-                    csv_content = grades_csv.read_text(encoding='utf-8-sig')
-                    for line in csv_content.split('\n')[3:]:  # Skip header rows
-                        parts = line.split(',')
+                    csv_content = grades_csv.read_text(encoding="utf-8-sig")
+                    for line in csv_content.split("\n")[3:]:  # Skip header rows
+                        parts = line.split(",")
                         if len(parts) >= 2:
                             sid = parts[1].strip().strip('"')
                             if sid.isdigit() and len(sid) >= 5:
@@ -1228,15 +1310,15 @@ async def process_efundi_zip(
                 except Exception as e:
                     print(f"[CSV Parse Error] {e}")
                 break
-        
+
         print(f"[Found {len(valid_student_ids)} valid student IDs in grades.csv]")
-        
+
         # Process each student folder
         grades_map = {}  # student_id -> score
         group_grades_map = {}  # Maps group member IDs to their grades
         feedback_files = {}  # student_folder_name -> [(source_path, dest_filename)]
         comments_map = {}  # student_id -> comment text
-        
+
         # Count total student folders with submissions first
         student_folders_to_process = []
         for student_folder in root_dir.iterdir():
@@ -1248,135 +1330,166 @@ async def process_efundi_zip(
             submission_dir = student_folder / "Submission attachment(s)"
             if not submission_dir.exists():
                 submission_dir = student_folder
-            submission_files = list(submission_dir.glob("*.docx")) + \
-                              list(submission_dir.glob("*.pdf")) + \
-                              list(submission_dir.glob("*.doc"))
+            submission_files = (
+                list(submission_dir.glob("*.docx"))
+                +list(submission_dir.glob("*.pdf"))
+                +list(submission_dir.glob("*.doc"))
+            )
             if submission_files:
-                student_folders_to_process.append((student_folder, student_id, submission_files[0]))
-        
+                student_folders_to_process.append(
+                    (student_folder, student_id, submission_files[0])
+                )
+
         results["total_submissions"] = len(student_folders_to_process)
         print(f"[Found {len(student_folders_to_process)} submissions to process]")
-        
+
         # Call progress callback with initial state
         if progress_callback:
             await progress_callback(results)
-        
-        for idx, (student_folder, student_id, submission_file) in enumerate(student_folders_to_process):
+
+        for idx, (student_folder, student_id, submission_file) in enumerate(
+            student_folders_to_process
+        ):
             # Update current student being processed
             results["current_student"] = {
                 "id": student_id,
                 "file": submission_file.name,
-                "index": idx + 1
+                "index": idx + 1,
             }
-            
+
             if progress_callback:
                 await progress_callback(results)
-            
+
             # Extract text from submission
             submission_text = extract_document_content(submission_file)
-            
+
             if not submission_text.strip():
                 print(f"[Skipping] Empty submission for {student_id}")
                 continue
-            
+
             # Run AI assessment
             print(f"[Processing] Student {student_id}: {submission_file.name}")
             assessment = await assess_with_ai(submission_text, rubric, instructions)
-            
+
             assessment["student_id"] = student_id
             assessment["student_folder"] = student_folder.name
             assessment["submission_file"] = submission_file.name
-            
+
             # Calculate percentage and final grade
             total_possible = rubric.get("total_marks", 100)
             total_score = assessment.get("total_score", 0)
-            
+
             # Normalize score if criteria weights sum to more than total_marks
-            criteria_weight_sum = sum(c.get("weight", 0) for c in rubric.get("criteria", []))
+            criteria_weight_sum = sum(
+                c.get("weight", 0) for c in rubric.get("criteria", [])
+            )
             if criteria_weight_sum > 0 and criteria_weight_sum != total_possible:
                 # Scale raw score to fit within total_marks
                 normalized_score = (total_score / criteria_weight_sum) * total_possible
-                print(f"[Score Normalize] {student_id}: raw {total_score}/{criteria_weight_sum} -> {normalized_score:.1f}/{total_possible}")
+                print(
+                    f"[Score Normalize] {student_id}: raw {total_score}/{criteria_weight_sum} -> {normalized_score:.1f}/{total_possible}"
+                )
                 total_score = round(normalized_score, 2)
                 assessment["total_score"] = total_score
-            
+
             # Cap at total_possible to prevent >100%
             if total_score > total_possible:
-                print(f"[Score Cap] {student_id}: {total_score} capped to {total_possible}")
+                print(
+                    f"[Score Cap] {student_id}: {total_score} capped to {total_possible}"
+                )
                 total_score = total_possible
                 assessment["total_score"] = total_score
-            
-            percentage = (total_score / total_possible * 100) if total_possible > 0 else 0
+
+            percentage = (
+                (total_score / total_possible * 100) if total_possible > 0 else 0
+            )
             assessment["percentage"] = round(min(percentage, 100), 2)
             assessment["max_score"] = total_possible
-            
+
             # Enrich criteria_scores with max_score from rubric
-            rubric_criteria_map = {c["name"]: c["weight"] for c in rubric.get("criteria", [])}
+            rubric_criteria_map = {
+                c["name"]: c["weight"] for c in rubric.get("criteria", [])
+            }
             if assessment.get("criteria_scores"):
                 for crit_name, crit_data in assessment["criteria_scores"].items():
                     if isinstance(crit_data, dict) and "max_score" not in crit_data:
-                        crit_data["max_score"] = rubric_criteria_map.get(crit_name, total_possible / max(len(assessment["criteria_scores"]), 1))
-            
+                        crit_data["max_score"] = rubric_criteria_map.get(
+                            crit_name,
+                            total_possible / max(len(assessment["criteria_scores"]), 1),
+                        )
+
             # Store grade for CSV update - primary student
             grades_map[student_id] = total_score
-            
+
             # Check for group members in the first page of the submission
             first_page_text = get_first_page_text(submission_file)
-            group_member_ids = extract_group_member_ids(first_page_text, valid_student_ids)
-            
+            group_member_ids = extract_group_member_ids(
+                first_page_text, valid_student_ids
+            )
+
             # If group members found, apply the same grade to all of them
             if group_member_ids:
                 # Filter out the primary student and any IDs already graded
-                other_members = [gid for gid in group_member_ids if gid != student_id and gid not in grades_map]
+                other_members = [
+                    gid
+                    for gid in group_member_ids
+                    if gid != student_id and gid not in grades_map
+                ]
                 if other_members:
-                    print(f"[Group Detected] Primary: {student_id}, Members: {other_members}")
+                    print(
+                        f"[Group Detected] Primary: {student_id}, Members: {other_members}"
+                    )
                     assessment["group_members"] = other_members
                     for member_id in other_members:
                         grades_map[member_id] = total_score
                         group_grades_map[member_id] = {
                             "score": total_score,
                             "from_student": student_id,
-                            "submission_file": submission_file.name
+                            "submission_file": submission_file.name,
                         }
-                        print(f"[Group Grade] {member_id} gets {total_score} (same as {student_id})")
-            
+                        print(
+                            f"[Group Grade] {member_id} gets {total_score} (same as {student_id})"
+                        )
+
             # Create feedback folder for this student
             feedback_folder = student_folder / "Feedback Attachment(s)"
             feedback_folder.mkdir(parents=True, exist_ok=True)
-            
+
             # Create annotated copy of the ORIGINAL submission in the Feedback folder
             feedback_files[student_folder.name] = []
-            
-            if submission_file.suffix.lower() == '.docx':
+
+            if submission_file.suffix.lower() == ".docx":
                 # Annotate the original DOCX and save to feedback folder
                 annotated_filename = submission_file.name  # Keep same name as original
                 annotated_path = feedback_folder / annotated_filename
-                
+
                 success = annotate_docx_with_feedback(
                     submission_file,  # Source: original submission
-                    annotated_path,   # Dest: feedback folder with same name
+                    annotated_path,  # Dest: feedback folder with same name
                     assessment.get("annotations", []),
                     assessment.get("overall_feedback", ""),
                     assessment.get("criteria_scores", {}),
                     total_score,
-                    total_possible
+                    total_possible,
                 )
-                
+
                 if success:
                     feedback_files[student_folder.name].append(annotated_path)
                     print(f"[Annotated] {annotated_path}")
-                
+
                 # Also create filled rubric document
                 rubric_filename = f"{submission_file.stem}_RUBRIC.docx"
                 rubric_path = feedback_folder / rubric_filename
-                create_rubric_feedback_document(rubric_path, rubric, assessment, student_id)
+                create_rubric_feedback_document(
+                    rubric_path, rubric, assessment, student_id
+                )
                 feedback_files[student_folder.name].append(rubric_path)
-            
-            elif submission_file.suffix.lower() == '.pdf':
+
+            elif submission_file.suffix.lower() == ".pdf":
                 # Try to annotate PDF with PyMuPDF
                 annotated_filename = submission_file.name  # Keep same name as original
                 annotated_path = feedback_folder / annotated_filename
-                
+
                 success = annotate_pdf_with_feedback(
                     submission_file,
                     annotated_path,
@@ -1384,55 +1497,59 @@ async def process_efundi_zip(
                     assessment.get("overall_feedback", ""),
                     assessment.get("criteria_scores", {}),
                     total_score,
-                    total_possible
+                    total_possible,
                 )
-                
+
                 if success:
                     feedback_files[student_folder.name].append(annotated_path)
                     print(f"[PDF Annotated] {annotated_path}")
                 else:
                     # Fallback to text file if PDF annotation fails
-                    feedback_txt_path = feedback_folder / f"{submission_file.stem}_FEEDBACK.txt"
+                    feedback_txt_path = (
+                        feedback_folder / f"{submission_file.stem}_FEEDBACK.txt"
+                    )
                     create_feedback_txt(feedback_txt_path, assessment)
                     feedback_files[student_folder.name].append(feedback_txt_path)
-                
+
                 # Also create filled rubric document for PDF submissions
                 rubric_filename = f"{submission_file.stem}_RUBRIC.docx"
                 rubric_path = feedback_folder / rubric_filename
-                create_rubric_feedback_document(rubric_path, rubric, assessment, student_id)
+                create_rubric_feedback_document(
+                    rubric_path, rubric, assessment, student_id
+                )
                 feedback_files[student_folder.name].append(rubric_path)
-            
+
             # Create/update comments.txt with the overall feedback
             comments_txt = f"""Score: {total_score}/{total_possible} ({percentage:.1f}%)
 
-{assessment.get('overall_feedback', '')}
+{assessment.get("overall_feedback", "")}
 
 STRENGTHS:
-{chr(10).join('• ' + s for s in assessment.get('strengths', []))}
+{chr(10).join("• " + s for s in assessment.get("strengths", []))}
 
 AREAS FOR IMPROVEMENT:
-{chr(10).join('• ' + a for a in assessment.get('areas_for_improvement', []))}
+{chr(10).join("• " + a for a in assessment.get("areas_for_improvement", []))}
 
 CRITERIA BREAKDOWN:
 """
-            for crit_name, crit_data in assessment.get('criteria_scores', {}).items():
+            for crit_name, crit_data in assessment.get("criteria_scores", {}).items():
                 comments_txt += f"\n{crit_name}: {crit_data.get('score', 0)} ({crit_data.get('level', 'N/A')})\n"
                 comments_txt += f"  {crit_data.get('feedback', '')}\n"
-            
+
             comments_map[student_id] = comments_txt
-            
+
             # Write comments.txt directly to the student folder
             comments_path = student_folder / "comments.txt"
-            comments_path.write_text(comments_txt, encoding='utf-8')
-            
+            comments_path.write_text(comments_txt, encoding="utf-8")
+
             results["assessments"].append(assessment)
             results["submissions_processed"] += 1
             results["current_student"] = None  # Clear current student after processing
-            
+
             # Report progress after each assessment
             if progress_callback:
                 await progress_callback(results)
-        
+
         # Add comments for group members in their respective folders
         for member_id, grade_info in group_grades_map.items():
             # Find the member's folder
@@ -1441,46 +1558,46 @@ CRITERIA BREAKDOWN:
                     continue
                 folder_student_id = extract_student_id(student_folder.name)
                 if folder_student_id == member_id:
-                    group_comment = f"""Score: {grade_info['score']}/{total_possible} (Group Submission)
+                    group_comment = f"""Score: {grade_info["score"]}/{total_possible} (Group Submission)
 
-This grade was assigned based on the group submission: {grade_info['submission_file']}
-Primary submitter student ID: {grade_info['from_student']}
+This grade was assigned based on the group submission: {grade_info["submission_file"]}
+Primary submitter student ID: {grade_info["from_student"]}
 
 Please refer to the feedback in the primary submitter's folder for detailed assessment.
 """
                     comments_path = student_folder / "comments.txt"
-                    comments_path.write_text(group_comment, encoding='utf-8')
+                    comments_path.write_text(group_comment, encoding="utf-8")
                     comments_map[member_id] = group_comment
                     print(f"[Group Comment] Added comment to {member_id}'s folder")
                     break
-        
+
         # Update grades.csv in place
         if grades_csv and grades_csv.exists():
             print(f"[Updating grades.csv] {len(grades_map)} grades to update")
             updated_csv_content = update_grades_csv_content(grades_csv, grades_map)
             grades_csv.write_bytes(updated_csv_content)
             results["grades_csv_path"] = str(grades_csv)
-        
+
         # Create output zip - repackage the entire extracted folder
         output_zip = output_dir / f"efundi_upload_{results['job_id']}.zip"
         print(f"[Creating ZIP] {output_zip}")
-        
-        with zipfile.ZipFile(output_zip, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
-            for file_path in root_dir.rglob('*'):
+
+        with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+            for file_path in root_dir.rglob("*"):
                 if file_path.is_file():
                     arcname = str(file_path.relative_to(temp_dir))
                     zout.write(file_path, arcname)
                 elif file_path.is_dir():
                     # Add empty directories
-                    arcname = str(file_path.relative_to(temp_dir)) + '/'
-                    zout.writestr(arcname, '')
-        
+                    arcname = str(file_path.relative_to(temp_dir)) + "/"
+                    zout.writestr(arcname, "")
+
         results["output_zip_path"] = str(output_zip)
         print(f"[Complete] Processed {results['submissions_processed']} submissions")
-        
+
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
-    
+
     return results
 
 
@@ -1489,28 +1606,28 @@ def update_grades_csv_content(csv_path: Path, grades_map: Dict[str, Any]) -> byt
     csv_bytes = csv_path.read_bytes()
     text = csv_bytes.decode("utf-8-sig", errors="replace")
     lines = text.splitlines()
-    
+
     if len(lines) < 3:
         return csv_bytes
-    
+
     # eFundi CSV format:
     # Line 1: "Assignment Name","SCORE_GRADE_TYPE"
     # Line 2: (empty)
     # Line 3: Header row with columns
     # Line 4+: Data rows
-    
+
     prefix = lines[:2]
     header = lines[2]
     data_lines = lines[3:]
-    
+
     # Parse header to find column indices
     reader = csv.DictReader([header] + data_lines)
     fieldnames = reader.fieldnames
-    
+
     out = io.StringIO()
     writer = csv.DictWriter(out, fieldnames=fieldnames, lineterminator="\r\n")
     writer.writeheader()
-    
+
     updated_count = 0
     for row in reader:
         # Try both "ID" and "Display ID" columns
@@ -1520,9 +1637,9 @@ def update_grades_csv_content(csv_path: Path, grades_map: Dict[str, Any]) -> byt
             updated_count += 1
             print(f"[Grade] {sid}: {grades_map[sid]}")
         writer.writerow(row)
-    
+
     print(f"[Grades CSV] Updated {updated_count} grades")
-    
+
     updated = "\r\n".join(prefix) + "\r\n" + out.getvalue().rstrip("\r\n") + "\r\n"
     return updated.encode("utf-8-sig")
 
@@ -1532,49 +1649,56 @@ def repackage_efundi_zip(
     output_zip: Path,
     grades_map: Dict[str, Any],
     feedback_files: Dict[str, List[Path]],
-    comments_map: Dict[str, str]
+    comments_map: Dict[str, str],
 ) -> Path:
     """Repackage eFundi zip with grades and feedback."""
-    
+
     output_zip.parent.mkdir(parents=True, exist_ok=True)
-    
-    with zipfile.ZipFile(download_zip, 'r') as zin, \
-         zipfile.ZipFile(output_zip, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
-        
+
+    with zipfile.ZipFile(download_zip, "r") as zin, zipfile.ZipFile(
+        output_zip, "w", compression=zipfile.ZIP_DEFLATED
+    ) as zout:
         names = zin.namelist()
-        root = names[0].split('/')[0] if names else ""
-        
+        root = names[0].split("/")[0] if names else ""
+
         for name in names:
             data = zin.read(name)
-            
+
             # Update grades.csv
             if name.endswith("/grades.csv") or name == "grades.csv":
                 csv_bytes = data
                 text = csv_bytes.decode("utf-8-sig", errors="replace")
                 lines = text.splitlines()
-                
+
                 if len(lines) >= 3:
                     prefix = lines[:2]
                     header = lines[2]
                     data_lines = lines[3:]
-                    
+
                     reader = csv.DictReader([header] + data_lines)
                     out_io = io.StringIO()
-                    writer = csv.DictWriter(out_io, fieldnames=reader.fieldnames, lineterminator="\r\n")
+                    writer = csv.DictWriter(
+                        out_io, fieldnames=reader.fieldnames, lineterminator="\r\n"
+                    )
                     writer.writeheader()
-                    
+
                     for row in reader:
                         sid = (row.get("ID") or row.get("Display ID") or "").strip()
                         if sid in grades_map:
                             row["grade"] = str(grades_map[sid])
                         writer.writerow(row)
-                    
-                    updated = "\r\n".join(prefix) + "\r\n" + out_io.getvalue().rstrip("\r\n") + "\r\n"
+
+                    updated = (
+                        "\r\n".join(prefix)
+                        +"\r\n"
+                        +out_io.getvalue().rstrip("\r\n")
+                        +"\r\n"
+                    )
                     data = updated.encode("utf-8-sig")
-                
+
                 zout.writestr(name, data)
                 continue
-            
+
             # Skip comments.txt if we have new ones
             if name.endswith("/comments.txt"):
                 folder = name.rsplit("/", 1)[0]
@@ -1582,23 +1706,23 @@ def repackage_efundi_zip(
                 sid = extract_student_id(student_folder)
                 if sid and sid in comments_map:
                     continue
-            
+
             zout.writestr(name, data)
-        
+
         # Add feedback files
         for student_folder, files in feedback_files.items():
             sid = extract_student_id(student_folder)
             if not sid:
                 continue
-            
+
             base = f"{root}/{student_folder}"
             fb_dir = f"{base}/Feedback Attachment(s)"
             zout.writestr(fb_dir + "/", b"")
-            
+
             for f in files:
                 if f.exists():
                     zout.write(f, arcname=f"{fb_dir}/{f.name}")
-        
+
         # Add comments.txt
         for sid, comment in comments_map.items():
             student_folder = None
@@ -1609,15 +1733,15 @@ def repackage_efundi_zip(
                         if extract_student_id(parts[0]) == sid:
                             student_folder = parts[0]
                             break
-            
+
             if student_folder:
                 path = f"{root}/{student_folder}/comments.txt"
                 zout.writestr(path, comment)
-    
+
     return output_zip
 
-
 # ===================== API ENDPOINTS =====================
+
 
 @app.get("/api/health")
 async def health_check():
@@ -1625,74 +1749,86 @@ async def health_check():
 
 
 @app.post("/api/rubric/upload")
-async def upload_rubric(
-    file: UploadFile = File(...),
-    name: str = Form(None)
-):
-    """Upload and parse a rubric file (DOCX or PDF)."""
-    
-    # Validate file type
-    allowed_extensions = {'.docx', '.pdf', '.doc', '.txt'}
-    file_ext = Path(file.filename).suffix.lower()
-    if file_ext not in allowed_extensions:
-        raise HTTPException(status_code=400, detail=f"Invalid file type. Allowed: {', '.join(allowed_extensions)}")
-    
-    # Save file
-    file_path = RUBRICS_DIR / file.filename
+async def upload_rubric(file: UploadFile=File(...)):
+    file_path = None
     try:
-        with open(file_path, 'wb') as f:
-            content = await file.read()
-            f.write(content)
+        # 1. Establish absolute safe path markers
+        temp_dir = Path("temp")
+        temp_dir.mkdir(exist_ok=True)
+        file_path = temp_dir / file.filename
+
+        # 2. Write the incoming payload asset safely to block memory
+        with open(file_path, "wb") as buffer:
+            buffer.write(await file.read())
+
+        # 3. Extract content using our sync/async routine
+        rubric_data = await parse_essay_matrix_from_docx(file_path)
+
+        # 4. Clean up the temp asset immediately
+        if file_path and file_path.exists():
+            file_path.unlink()
+
+        # 5. Clean and sanitize the object tree before returning
+        clean_rubric = sanitize_for_json(rubric_data)
+
+        # Ensure a valid fallback structure exists if parsing came up short
+        if not clean_rubric or not isinstance(clean_rubric, dict):
+            clean_rubric = {"name": file.filename, "total_marks": 0, "criteria": []}
+        elif "criteria" not in clean_rubric:
+            clean_rubric["criteria"] = []
+            clean_rubric["name"] = clean_rubric.get("name", file.filename)
+            clean_rubric["total_marks"] = clean_rubric.get("total_marks", 0)
+
+        # 6. Build universal layout structure mapping for the React context receiver
+        response_payload = {
+            "success": True,
+            "message": "Rubric processed successfully.",
+            "rubric": clean_rubric,
+            "data": clean_rubric,
+            **clean_rubric,
+        }
+
+        return JSONResponse(status_code=200, content=response_payload)
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
-    
-    # Parse rubric
-    try:
-        rubric_data = parse_essay_matrix_from_docx(file_path)
-    except Exception as e:
-        # Clean up failed file
-        file_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail=f"Failed to parse rubric file: {str(e)}. Please ensure it's a valid document.")
-    
-    rubric_data["name"] = name or file.filename
-    rubric_data["file_path"] = str(file_path)
-    rubric_data["created_at"] = datetime.now(timezone.utc).isoformat()
-    
-    # Store in MongoDB
-    result = rubrics_collection.insert_one(rubric_data)
-    rubric_data["_id"] = str(result.inserted_id)
-    
-    return {
-        "success": True,
-        "rubric": rubric_data
-    }
+        print(f"[Backend Upload Endpoint Crash] {e}")
+        # Safeguard fallback unlink step inside exception loop block
+        if file_path and file_path.exists():
+            try:
+                file_path.unlink()
+            except Exception:
+                pass
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "detail": f"Server extraction engine fault: {str(e)}",
+            },
+        )
 
 
 @app.post("/api/rubric/create")
 async def create_rubric(rubric_data: dict):
     """Create a rubric manually with specified criteria."""
     rubric_data["created_at"] = datetime.now(timezone.utc).isoformat()
-    
+
     # Calculate total marks
     total = sum(c.get("weight", 0) for c in rubric_data.get("criteria", []))
     rubric_data["total_marks"] = total
-    
+
     result = rubrics_collection.insert_one(rubric_data)
     rubric_data["_id"] = str(result.inserted_id)
-    
-    return {
-        "success": True,
-        "rubric": rubric_data
-    }
+
+    return {"success": True, "rubric": rubric_data}
 
 
 @app.post("/api/rubric/essay-default")
 async def create_default_essay_rubric(
-    name: str = Form("Essay Assessment Rubric"),
-    total_marks: float = Form(50)
+    name: str=Form("Essay Assessment Rubric"), total_marks: float=Form(50)
 ):
     """Create a default essay assessment rubric with standard criteria."""
-    
+
     # Standard essay rubric criteria
     criteria = [
         {
@@ -1702,24 +1838,24 @@ async def create_default_essay_rubric(
                 "Excellent (80-100%)": {
                     "description": "Clear, focused, arguable thesis directly addressing the prompt. Consistently supports thesis with insightful analysis. Logical, well-structured, persuasive argument.",
                     "min_score": total_marks * 0.2 * 0.8,
-                    "max_score": total_marks * 0.2
+                    "max_score": total_marks * 0.2,
                 },
                 "Good (60-79%)": {
                     "description": "Clear thesis addressing the prompt. Generally supports thesis with relevant evidence and analysis. Mostly logical argument.",
                     "min_score": total_marks * 0.2 * 0.6,
-                    "max_score": total_marks * 0.2 * 0.79
+                    "max_score": total_marks * 0.2 * 0.79,
                 },
                 "Satisfactory (40-59%)": {
                     "description": "Thesis present but may be vague or underdeveloped. Support limited or superficial. Argument may lack clarity.",
                     "min_score": total_marks * 0.2 * 0.4,
-                    "max_score": total_marks * 0.2 * 0.59
+                    "max_score": total_marks * 0.2 * 0.59,
                 },
                 "Needs Improvement (0-39%)": {
                     "description": "Thesis absent, unclear, or doesn't address prompt. Lacks central argument or supporting evidence. Disorganized.",
                     "min_score": 0,
-                    "max_score": total_marks * 0.2 * 0.39
-                }
-            }
+                    "max_score": total_marks * 0.2 * 0.39,
+                },
+            },
         },
         {
             "name": "Evidence & Historical Accuracy",
@@ -1728,24 +1864,24 @@ async def create_default_essay_rubric(
                 "Excellent (80-100%)": {
                     "description": "Extensive use of accurate, relevant evidence. Evidence integrated seamlessly. Deep understanding demonstrated.",
                     "min_score": total_marks * 0.3 * 0.8,
-                    "max_score": total_marks * 0.3
+                    "max_score": total_marks * 0.3,
                 },
                 "Good (60-79%)": {
                     "description": "Good range of accurate evidence. Generally well-integrated. Solid understanding of the period.",
                     "min_score": total_marks * 0.3 * 0.6,
-                    "max_score": total_marks * 0.3 * 0.79
+                    "max_score": total_marks * 0.3 * 0.79,
                 },
                 "Satisfactory (40-59%)": {
                     "description": "Some evidence but limited in scope or accuracy. May be listed rather than integrated. Basic understanding.",
                     "min_score": total_marks * 0.3 * 0.4,
-                    "max_score": total_marks * 0.3 * 0.59
+                    "max_score": total_marks * 0.3 * 0.59,
                 },
                 "Needs Improvement (0-39%)": {
                     "description": "Little to no relevant evidence. Claims unsubstantiated. Fundamental lack of understanding.",
                     "min_score": 0,
-                    "max_score": total_marks * 0.3 * 0.39
-                }
-            }
+                    "max_score": total_marks * 0.3 * 0.39,
+                },
+            },
         },
         {
             "name": "Analysis & Interpretation",
@@ -1754,24 +1890,24 @@ async def create_default_essay_rubric(
                 "Excellent (80-100%)": {
                     "description": "Critical thinking and insightful interpretation. Explains how and why events occurred. Identifies nuances and complexities.",
                     "min_score": total_marks * 0.3 * 0.8,
-                    "max_score": total_marks * 0.3
+                    "max_score": total_marks * 0.3,
                 },
                 "Good (60-79%)": {
                     "description": "Good analytical skills. Explains key events and significance. Connects cause and effect reasonably well.",
                     "min_score": total_marks * 0.3 * 0.6,
-                    "max_score": total_marks * 0.3 * 0.79
+                    "max_score": total_marks * 0.3 * 0.79,
                 },
                 "Satisfactory (40-59%)": {
                     "description": "Basic explanation but analysis often descriptive. Cause-effect may be simplistic or unclear.",
                     "min_score": total_marks * 0.3 * 0.4,
-                    "max_score": total_marks * 0.3 * 0.59
+                    "max_score": total_marks * 0.3 * 0.59,
                 },
                 "Needs Improvement (0-39%)": {
                     "description": "Lacks analytical depth. Primarily descriptive. Fails to engage with complexities.",
                     "min_score": 0,
-                    "max_score": total_marks * 0.3 * 0.39
-                }
-            }
+                    "max_score": total_marks * 0.3 * 0.39,
+                },
+            },
         },
         {
             "name": "Structure & Organization",
@@ -1780,24 +1916,24 @@ async def create_default_essay_rubric(
                 "Excellent (80-100%)": {
                     "description": "Logically structured with clear intro, body, conclusion. Smooth transitions. Each paragraph focused and contributing.",
                     "min_score": total_marks * 0.1 * 0.8,
-                    "max_score": total_marks * 0.1
+                    "max_score": total_marks * 0.1,
                 },
                 "Good (60-79%)": {
                     "description": "Recognizable structure. Paragraphs generally organized. Transitions mostly clear.",
                     "min_score": total_marks * 0.1 * 0.6,
-                    "max_score": total_marks * 0.1 * 0.79
+                    "max_score": total_marks * 0.1 * 0.79,
                 },
                 "Satisfactory (40-59%)": {
                     "description": "Structure present but inconsistent. Paragraphs may lack focus. Transitions abrupt or missing.",
                     "min_score": total_marks * 0.1 * 0.4,
-                    "max_score": total_marks * 0.1 * 0.59
+                    "max_score": total_marks * 0.1 * 0.59,
                 },
                 "Needs Improvement (0-39%)": {
                     "description": "Disorganized. Lacks clear structure. Difficult to follow.",
                     "min_score": 0,
-                    "max_score": total_marks * 0.1 * 0.39
-                }
-            }
+                    "max_score": total_marks * 0.1 * 0.39,
+                },
+            },
         },
         {
             "name": "Language, Style & Referencing",
@@ -1806,47 +1942,48 @@ async def create_default_essay_rubric(
                 "Excellent (80-100%)": {
                     "description": "Clear, concise, sophisticated writing. Precise vocabulary. Minimal errors. Accurate referencing if required.",
                     "min_score": total_marks * 0.1 * 0.8,
-                    "max_score": total_marks * 0.1
+                    "max_score": total_marks * 0.1,
                 },
                 "Good (60-79%)": {
                     "description": "Generally clear and appropriate. Minor errors that don't impede understanding. Mostly accurate referencing.",
                     "min_score": total_marks * 0.1 * 0.6,
-                    "max_score": total_marks * 0.1 * 0.79
+                    "max_score": total_marks * 0.1 * 0.79,
                 },
                 "Satisfactory (40-59%)": {
                     "description": "May be unclear or contain frequent errors. Inconsistent referencing.",
                     "min_score": total_marks * 0.1 * 0.4,
-                    "max_score": total_marks * 0.1 * 0.59
+                    "max_score": total_marks * 0.1 * 0.59,
                 },
                 "Needs Improvement (0-39%)": {
                     "description": "Unclear or confusing. Pervasive errors. Absent or fundamentally flawed referencing.",
                     "min_score": 0,
-                    "max_score": total_marks * 0.1 * 0.39
-                }
-            }
-        }
+                    "max_score": total_marks * 0.1 * 0.39,
+                },
+            },
+        },
     ]
-    
+
     rubric_data = {
         "name": name,
         "total_marks": total_marks,
         "criteria": criteria,
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    
+
     result = rubrics_collection.insert_one(rubric_data)
     rubric_data["_id"] = str(result.inserted_id)
-    
-    return {
-        "success": True,
-        "rubric": rubric_data
-    }
+
+    return {"success": True, "rubric": rubric_data}
 
 
 @app.get("/api/rubrics")
 async def list_rubrics():
     """List all uploaded rubrics."""
-    rubrics = list(rubrics_collection.find({}, {"_id": 1, "name": 1, "total_marks": 1, "criteria": 1, "created_at": 1}))
+    rubrics = list(
+        rubrics_collection.find(
+            {}, {"_id": 1, "name": 1, "total_marks": 1, "criteria": 1, "created_at": 1}
+        )
+    )
     for r in rubrics:
         r["_id"] = str(r["_id"])
     return {"rubrics": rubrics}
@@ -1879,28 +2016,30 @@ async def delete_rubric(rubric_id: str):
 
 @app.post("/api/assess/single")
 async def assess_single_submission(
-    file: UploadFile = File(...),
-    rubric_id: str = Form(...),
-    student_id: str = Form(None)
+    file: UploadFile=File(...),
+    rubric_id: str=Form(...),
+    student_id: str=Form(None),
 ):
     """Assess a single submission file."""
-    
+
     # Get rubric
     rubric = rubrics_collection.find_one({"_id": ObjectId(rubric_id)})
     if not rubric:
         raise HTTPException(status_code=404, detail="Rubric not found")
-    
+
     # Save submission
     submission_path = UPLOAD_DIR / file.filename
-    with open(submission_path, 'wb') as f:
+    with open(submission_path, "wb") as f:
         content = await file.read()
         f.write(content)
-    
+
     # Extract text
     submission_text = extract_document_content(submission_path)
     if not submission_text.strip():
-        raise HTTPException(status_code=400, detail="Could not extract text from submission")
-    
+        raise HTTPException(
+            status_code=400, detail="Could not extract text from submission"
+        )
+
     # Run AI assessment
     assessment = await assess_with_ai(submission_text, rubric)
     assessment["student_id"] = student_id or submission_path.stem
@@ -1908,70 +2047,80 @@ async def assess_single_submission(
     assessment["rubric_id"] = str(rubric["_id"])
     assessment["rubric_name"] = rubric["name"]
     assessment["timestamp"] = datetime.now(timezone.utc).isoformat()
-    
+
     # Calculate percentage
     total_possible = rubric.get("total_marks", 100)
     total_score = assessment.get("total_score", 0)
-    assessment["percentage"] = round((total_score / total_possible * 100) if total_possible > 0 else 0, 2)
+    assessment["percentage"] = round(
+        (total_score / total_possible * 100) if total_possible > 0 else 0, 2
+    )
     assessment["max_score"] = total_possible
-    
+
     # Create annotated document
-    if submission_path.suffix.lower() == '.docx':
+    if submission_path.suffix.lower() == ".docx":
         output_path = OUTPUT_DIR / f"{submission_path.stem}_GRADED.docx"
         annotate_docx_with_feedback(
             submission_path,
             output_path,
             assessment.get("annotations", []),
-            assessment.get("overall_feedback", "")
+            assessment.get("overall_feedback", ""),
         )
         assessment["annotated_file"] = str(output_path)
-    
+
     # Store assessment
     result = assessments_collection.insert_one(assessment)
     assessment["_id"] = str(result.inserted_id)
-    
+
     return assessment
 
 
 @app.post("/api/assess/bulk")
 async def assess_bulk_zip(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    rubric_id: str = Form(...),
-    instructions: Optional[str] = Form(None),
-    instructions_file: Optional[UploadFile] = File(None)
+    file: UploadFile=File(...),
+    rubric_id: str=Form(...),
+    instructions: Optional[str]=Form(None),
+    instructions_file: Optional[UploadFile]=File(None),
 ):
     """Process an eFundi zip file with multiple submissions."""
-    
+
     # Get rubric
     rubric = rubrics_collection.find_one({"_id": ObjectId(rubric_id)})
     if not rubric:
         raise HTTPException(status_code=404, detail="Rubric not found")
-    
+
     # Process instructions
     assignment_instructions = instructions or ""
     if instructions_file and instructions_file.filename:
         instructions_content = await instructions_file.read()
-        if instructions_file.filename.endswith('.txt'):
-            assignment_instructions = instructions_content.decode('utf-8', errors='ignore')
-        elif instructions_file.filename.endswith('.docx'):
+        if instructions_file.filename.endswith(".txt"):
+            assignment_instructions = instructions_content.decode(
+                "utf-8", errors="ignore"
+            )
+        elif instructions_file.filename.endswith(".docx"):
             # Extract text from DOCX
-            temp_instructions = UPLOAD_DIR / f"instructions_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
+            temp_instructions = (
+                UPLOAD_DIR
+                / f"instructions_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
+            )
             temp_instructions.write_bytes(instructions_content)
             assignment_instructions = extract_document_content(temp_instructions)
             temp_instructions.unlink(missing_ok=True)
-        elif instructions_file.filename.endswith('.pdf'):
-            temp_instructions = UPLOAD_DIR / f"instructions_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
+        elif instructions_file.filename.endswith(".pdf"):
+            temp_instructions = (
+                UPLOAD_DIR
+                / f"instructions_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
+            )
             temp_instructions.write_bytes(instructions_content)
             assignment_instructions = extract_document_content(temp_instructions)
             temp_instructions.unlink(missing_ok=True)
-    
+
     # Save zip
     zip_path = UPLOAD_DIR / file.filename
-    with open(zip_path, 'wb') as f:
+    with open(zip_path, "wb") as f:
         content = await file.read()
         f.write(content)
-    
+
     # Create job
     job_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     job = {
@@ -1980,58 +2129,68 @@ async def assess_bulk_zip(
         "rubric_id": str(rubric["_id"]),
         "rubric_name": rubric["name"],
         "zip_file": file.filename,
-        "instructions": assignment_instructions[:2000] if assignment_instructions else None,  # Store truncated
+        "instructions": (
+            assignment_instructions[:2000] if assignment_instructions else None
+        ),  # Store truncated
         "created_at": datetime.now(timezone.utc).isoformat(),
         "progress": 0,
         "total": 0,
-        "results": None
+        "results": None,
     }
     jobs_collection.insert_one(job)
-    
+
     # Process in background
     async def process_job():
         try:
             output_dir = OUTPUT_DIR / job_id
             output_dir.mkdir(parents=True, exist_ok=True)
-            
+
             # Progress callback to update job in real-time
             async def update_progress(results):
                 jobs_collection.update_one(
                     {"job_id": job_id},
-                    {"$set": {
-                        "progress": results.get("submissions_processed", 0),
-                        "total": results.get("total_submissions", 0),
-                        "current_student": results.get("current_student"),
-                        "results": results
-                    }}
+                    {
+                        "$set": {
+                            "progress": results.get("submissions_processed", 0),
+                            "total": results.get("total_submissions", 0),
+                            "current_student": results.get("current_student"),
+                            "results": results,
+                        }
+                    },
                 )
-            
-            results = await process_efundi_zip(zip_path, rubric, output_dir, update_progress, assignment_instructions)
-            
+
+            results = await process_efundi_zip(
+                zip_path, rubric, output_dir, update_progress, assignment_instructions
+            )
+
             jobs_collection.update_one(
                 {"job_id": job_id},
-                {"$set": {
-                    "status": "completed",
-                    "results": results,
-                    "completed_at": datetime.now(timezone.utc).isoformat()
-                }}
+                {
+                    "$set": {
+                        "status": "completed",
+                        "results": results,
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
             )
         except Exception as e:
             jobs_collection.update_one(
                 {"job_id": job_id},
-                {"$set": {
-                    "status": "failed",
-                    "error": str(e),
-                    "completed_at": datetime.now(timezone.utc).isoformat()
-                }}
+                {
+                    "$set": {
+                        "status": "failed",
+                        "error": str(e),
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
             )
-    
+
     background_tasks.add_task(process_job)
-    
+
     return {
         "success": True,
         "job_id": job_id,
-        "message": "Processing started. Check /api/job/{job_id} for status."
+        "message": "Processing started. Check /api/job/{job_id} for status.",
     }
 
 
@@ -2055,31 +2214,35 @@ async def get_job_logs(job_id: str):
 
 @app.get("/api/jobs")
 async def list_jobs():
-    """List all assessment jobs."""
-    jobs = list(jobs_collection.find().sort("created_at", -1).limit(50))
-    for job in jobs:
-        job["_id"] = str(job["_id"])
-        if not job.get("job_id"):
-            job["job_id"] = job["_id"]
-    return {"jobs": jobs}
+    """List all assessment jobs explicitly returning empty list instead of crashing if DB is empty."""
+    try:
+        jobs = list(jobs_collection.find().sort("created_at", -1).limit(50))
+        for job in jobs:
+            job["_id"] = str(job["_id"])
+            if not job.get("job_id"):
+                job["job_id"] = job["_id"]
+        return {"jobs": jobs}
+    except Exception as e:
+        print(f"[Backend Error] /api/jobs failed: {e}")
+        return {"jobs": [], "error": str(e)}
 
 
 @app.get("/api/download/{job_id}")
 async def download_results(job_id: str):
     """Download the processed eFundi zip for a job."""
     print(f"[Download] Looking for job_id: {job_id}")
-    
+
     # Try to find by job_id field first, then by _id
     job = jobs_collection.find_one({"job_id": job_id})
     print(f"[Download] Find by job_id: {job is not None}")
-    
+
     if not job:
         try:
             job = jobs_collection.find_one({"_id": ObjectId(job_id)})
             print(f"[Download] Find by _id: {job is not None}")
         except Exception as e:
             print(f"[Download] ObjectId error: {e}")
-    
+
     if not job:
         # Debug: list all jobs
         all_jobs = list(jobs_collection.find())
@@ -2087,29 +2250,41 @@ async def download_results(job_id: str):
         for j in all_jobs:
             print(f"[Download]   job_id={j.get('job_id')}, _id={j.get('_id')}")
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     if job.get("status") != "completed":
         raise HTTPException(status_code=400, detail="Job not completed yet")
-    
+
     # Check both locations for output_zip_path
     results = job.get("results", {})
     zip_path = results.get("output_zip_path") or job.get("output_zip_path")
     print(f"[Download] zip_path: {zip_path}")
-    
+
     if not zip_path or not Path(zip_path).exists():
         raise HTTPException(status_code=404, detail="Output file not found")
-    
+
     return FileResponse(
-        zip_path,
-        media_type="application/zip",
-        filename=Path(zip_path).name
+        zip_path, media_type="application/zip", filename=Path(zip_path).name
     )
 
 
 @app.get("/api/assessments")
 async def list_assessments():
     """List recent assessments."""
-    assessments = list(assessments_collection.find({}, {"_id": 1, "student_id": 1, "total_score": 1, "percentage": 1, "rubric_name": 1, "timestamp": 1}).sort("timestamp", -1).limit(100))
+    assessments = list(
+        assessments_collection.find(
+            {},
+            {
+                "_id": 1,
+                "student_id": 1,
+                "total_score": 1,
+                "percentage": 1,
+                "rubric_name": 1,
+                "timestamp": 1,
+            },
+        )
+        .sort("timestamp", -1)
+        .limit(100)
+    )
     for a in assessments:
         a["_id"] = str(a["_id"])
     return {"assessments": assessments}
@@ -2135,18 +2310,18 @@ async def download_annotated_document(assessment_id: str):
         assessment = assessments_collection.find_one({"_id": ObjectId(assessment_id)})
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid assessment ID format")
-    
+
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
-    
+
     annotated_file = assessment.get("annotated_file")
     if not annotated_file or not Path(annotated_file).exists():
         raise HTTPException(status_code=404, detail="Annotated document not found")
-    
+
     return FileResponse(
         annotated_file,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=Path(annotated_file).name
+        filename=Path(annotated_file).name,
     )
 
 
@@ -2154,15 +2329,15 @@ async def download_annotated_document(assessment_id: str):
 @app.post("/api/webhook/efundi")
 async def efundi_webhook(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(None),
-    rubric_id: str = Form(None),
-    callback_url: str = Form(None)
+    file: UploadFile=File(None),
+    rubric_id: str=Form(None),
+    callback_url: str=Form(None),
 ):
     """Webhook to receive eFundi zip files for processing."""
-    
+
     if not file:
         raise HTTPException(status_code=400, detail="No file provided")
-    
+
     # Use default rubric if not specified
     if not rubric_id:
         rubric = rubrics_collection.find_one({}, sort=[("created_at", -1)])
@@ -2170,15 +2345,16 @@ async def efundi_webhook(
             rubric_id = str(rubric["_id"])
         else:
             raise HTTPException(status_code=400, detail="No rubric available")
-    
+
     # Same as bulk assess
     return await assess_bulk_zip(background_tasks, file, rubric_id)
 
-
 # ===================== EFUNDI AUTOMATION =====================
+
 
 # Store eFundi sessions
 efundi_sessions = db["efundi_sessions"]
+
 
 class EfundiCredentials(BaseModel):
     username: str
@@ -2195,59 +2371,77 @@ class EfundiDownloadRequest(BaseModel):
 async def efundi_authenticate(credentials: EfundiCredentials):
     """Authenticate with eFundi and save session."""
     if not PLAYWRIGHT_AVAILABLE:
-        raise HTTPException(status_code=500, detail="Playwright not available for browser automation")
-    
+        raise HTTPException(
+            status_code=500, detail="Playwright not available for browser automation"
+        )
+
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context()
             page = await context.new_page()
-            
+
             # Go to eFundi login
-            await page.goto("https://efundi.nwu.ac.za/portal", wait_until="domcontentloaded")
+            await page.goto(
+                "https://efundi.nwu.ac.za/portal", wait_until="domcontentloaded"
+            )
             await page.wait_for_timeout(2000)
-            
+
             # Click login if needed
             login_link = page.locator("a:has-text('Login')")
             if await login_link.count() > 0:
                 await login_link.first.click()
                 await page.wait_for_timeout(2000)
-            
+
             # Fill credentials - eFundi uses CAS/institutional login
             # Try to find username field
-            username_field = page.locator("input[name='username'], input[id='username'], input[type='text']").first
-            password_field = page.locator("input[name='password'], input[id='password'], input[type='password']").first
-            
+            username_field = page.locator(
+                "input[name='username'], input[id='username'], input[type='text']"
+            ).first
+            password_field = page.locator(
+                "input[name='password'], input[id='password'], input[type='password']"
+            ).first
+
             await username_field.fill(credentials.username)
             await password_field.fill(credentials.password)
-            
+
             # Submit
-            submit_btn = page.locator("button[type='submit'], input[type='submit'], button:has-text('Login'), button:has-text('Sign')").first
+            submit_btn = page.locator(
+                "button[type='submit'], input[type='submit'], button:has-text('Login'), button:has-text('Sign')"
+            ).first
             await submit_btn.click()
             await page.wait_for_timeout(5000)
-            
+
             # Check if login was successful by looking for user menu or dashboard elements
             if "portal" in page.url and "login" not in page.url.lower():
                 # Save session state
                 storage_state = await context.storage_state()
-                
+
                 # Store in database (encrypted in production)
                 efundi_sessions.update_one(
                     {"username": credentials.username},
-                    {"$set": {
-                        "username": credentials.username,
-                        "storage_state": storage_state,
-                        "authenticated_at": datetime.now(timezone.utc).isoformat()
-                    }},
-                    upsert=True
+                    {
+                        "$set": {
+                            "username": credentials.username,
+                            "storage_state": storage_state,
+                            "authenticated_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    },
+                    upsert=True,
                 )
-                
+
                 await browser.close()
-                return {"success": True, "message": "Successfully authenticated with eFundi"}
+                return {
+                    "success": True,
+                    "message": "Successfully authenticated with eFundi",
+                }
             else:
                 await browser.close()
-                raise HTTPException(status_code=401, detail="Authentication failed. Please check your credentials.")
-                
+                raise HTTPException(
+                    status_code=401,
+                    detail="Authentication failed. Please check your credentials.",
+                )
+
     except Exception as e:
         print(f"[eFundi Auth Error] {e}")
         raise HTTPException(status_code=500, detail=f"Authentication error: {str(e)}")
@@ -2261,91 +2455,102 @@ async def efundi_status():
         return {
             "authenticated": True,
             "username": session.get("username"),
-            "authenticated_at": session.get("authenticated_at")
+            "authenticated_at": session.get("authenticated_at"),
         }
     return {"authenticated": False}
 
 
 @app.post("/api/efundi/debug-page")
-async def efundi_debug_page(url: str = Form(...)):
+async def efundi_debug_page(url: str=Form(...)):
     """Navigate to a URL and capture the page HTML and screenshot for debugging."""
     if not PLAYWRIGHT_AVAILABLE:
         raise HTTPException(status_code=500, detail="Playwright not available")
-    
+
     session = efundi_sessions.find_one({}, sort=[("authenticated_at", -1)])
     if not session:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
+
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(storage_state=session["storage_state"])
             page = await context.new_page()
             page.set_default_timeout(30000)
-            
+
             await page.goto(url, wait_until="domcontentloaded")
             await page.wait_for_timeout(5000)
-            
+
             # Get page info
             title = await page.title()
             current_url = page.url
-            
+
             # Get all links on the page
-            links = await page.evaluate('''() => {
+            links = await page.evaluate("""() => {
                 return Array.from(document.querySelectorAll('a')).map(a => ({
                     text: a.innerText.trim().substring(0, 100),
                     href: a.href,
                     className: a.className
                 })).filter(l => l.text.length > 0)
-            }''')
-            
+            }""")
+
             # Get all buttons
-            buttons = await page.evaluate('''() => {
+            buttons = await page.evaluate("""() => {
                 return Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"]')).map(b => ({
                     text: (b.innerText || b.value || '').trim().substring(0, 100),
                     type: b.type,
                     className: b.className
                 })).filter(b => b.text.length > 0)
-            }''')
-            
+            }""")
+
             # Save screenshot
             debug_dir = OUTPUT_DIR / "debug"
             debug_dir.mkdir(parents=True, exist_ok=True)
-            screenshot_path = debug_dir / f"debug_{datetime.now().strftime('%H%M%S')}.png"
+            screenshot_path = (
+                debug_dir / f"debug_{datetime.now().strftime('%H%M%S')}.png"
+            )
             await page.screenshot(path=str(screenshot_path), full_page=True)
-            
+
             await browser.close()
-            
+
             # Filter for relevant links
-            relevant_links = [l for l in links if any(kw in l['text'].lower() for kw in ['download', 'grade', 'assignment', 'submission', 'all'])]
-            
+            relevant_links = [
+                l
+                for l in links
+                if any(
+                    kw in l["text"].lower()
+                    for kw in ["download", "grade", "assignment", "submission", "all"]
+                )
+            ]
+
             return {
                 "title": title,
                 "url": current_url,
                 "screenshot": str(screenshot_path),
                 "relevant_links": relevant_links[:20],
                 "all_links_count": len(links),
-                "buttons": buttons[:10]
+                "buttons": buttons[:10],
             }
-            
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/efundi/download-and-assess")
 async def efundi_download_and_assess(
-    background_tasks: BackgroundTasks,
-    request: EfundiDownloadRequest
+    background_tasks: BackgroundTasks, request: EfundiDownloadRequest
 ):
     """Download assignment ZIP from eFundi and start assessment."""
     if not PLAYWRIGHT_AVAILABLE:
         raise HTTPException(status_code=500, detail="Playwright not available")
-    
+
     # Get saved session
     session = efundi_sessions.find_one({}, sort=[("authenticated_at", -1)])
     if not session:
-        raise HTTPException(status_code=401, detail="Not authenticated with eFundi. Please authenticate first.")
-    
+        raise HTTPException(
+            status_code=401,
+            detail="Not authenticated with eFundi. Please authenticate first.",
+        )
+
     # Verify rubric exists
     try:
         rubric = rubrics_collection.find_one({"_id": ObjectId(request.rubric_id)})
@@ -2353,7 +2558,7 @@ async def efundi_download_and_assess(
         raise HTTPException(status_code=400, detail="Invalid rubric ID")
     if not rubric:
         raise HTTPException(status_code=404, detail="Rubric not found")
-    
+
     # Create job
     job_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     job = {
@@ -2367,58 +2572,66 @@ async def efundi_download_and_assess(
         "progress": 0,
         "total": 0,
         "results": None,
-        "logs": []
+        "logs": [],
     }
     jobs_collection.insert_one(job)
-    
+
     def update_job_log(message):
         jobs_collection.update_one(
             {"job_id": job_id},
-            {"$push": {"logs": {"time": datetime.now(timezone.utc).isoformat(), "message": message}}}
+            {
+                "$push": {
+                    "logs": {
+                        "time": datetime.now(timezone.utc).isoformat(),
+                        "message": message,
+                    }
+                }
+            },
         )
         print(f"[Job {job_id}] {message}")
-    
+
     def update_status(status):
-        jobs_collection.update_one(
-            {"job_id": job_id},
-            {"$set": {"status": status}}
-        )
-    
+        jobs_collection.update_one({"job_id": job_id}, {"$set": {"status": status}})
+
     # Process in background
     async def download_and_process():
         try:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context(storage_state=session["storage_state"])
+                context = await browser.new_context(
+                    storage_state=session["storage_state"]
+                )
                 page = await context.new_page()
                 page.set_default_timeout(60000)  # 60 second timeout
-                
+
                 update_job_log("Starting browser automation...")
                 update_status("navigating")
-                
+
                 assignment_url = request.assignment_url
                 assignment_name = request.assignment_name
-                
+
                 # Step 1: Navigate to the site/tool URL
                 update_job_log(f"Navigating to: {assignment_url}")
                 await page.goto(assignment_url, wait_until="domcontentloaded")
                 await page.wait_for_timeout(4000)
-                
+
                 # Save debug screenshot
                 debug_dir = OUTPUT_DIR / "debug"
                 debug_dir.mkdir(parents=True, exist_ok=True)
-                await page.screenshot(path=str(debug_dir / f"{job_id}_01_initial.png"), full_page=True)
+                await page.screenshot(
+                    path=str(debug_dir / f"{job_id}_01_initial.png"), full_page=True
+                )
                 update_job_log("Saved initial page screenshot")
-                
+
                 # Step 2: Click on "Assignments" in the left sidebar if we're not already there
                 update_job_log("Looking for Assignments tab in sidebar...")
                 assignments_selectors = [
                     "a.Mrphs-toolsNav__menuitem--link:has-text('Assignments')",
                     "li a:has-text('Assignments')",
                     ".Mrphs-toolsNav__menuitem span:has-text('Assignments')",
-                    "a[title*='Assignments']"
+                    "a[title*='Assignments']",
                 ]
-                
+
                 for selector in assignments_selectors:
                     try:
                         loc = page.locator(selector)
@@ -2429,35 +2642,40 @@ async def efundi_download_and_assess(
                             break
                     except:
                         continue
-                
-                await page.screenshot(path=str(debug_dir / f"{job_id}_02_assignments_tab.png"), full_page=True)
-                
+
+                await page.screenshot(
+                    path=str(debug_dir / f"{job_id}_02_assignments_tab.png"),
+                    full_page=True,
+                )
+
                 # Step 3: Find the specific assignment row and click "Grade" link
                 # The assignments are in a table with columns: Assignment Title, For, Status, Open Date, Due Date, In/New, Scale, Remove?
                 # Each row has links: Edit | Duplicate | Grade
                 # IMPORTANT: There are 2 Grade links per row - we need the one with sakai_action=doGrade_assignment
                 update_job_log("Looking for assignment row to click Grade...")
                 update_status("finding_assignment")
-                
+
                 assignment_name = request.assignment_name
                 grade_clicked = False
-                
+
                 if assignment_name:
                     update_job_log(f"Looking for assignment: {assignment_name}")
-                    
+
                     # Look for the specific Grade link with the correct action
                     # The Grade link has onclick containing 'doGrade_assignment'
                     grade_link_selectors = [
-                        f"a[onclick*='doGrade_assignment']:has-text('Grade')",
+                        "a[onclick*='doGrade_assignment']:has-text('Grade')",
                         f"tr:has-text('{assignment_name}') a[onclick*='doGrade_assignment']",
-                        f"a[href*='doGrade_assignment'][href*='{assignment_name.replace(' ', '')}']"
+                        f"a[href*='doGrade_assignment'][href*='{assignment_name.replace(' ', '')}']",
                     ]
-                    
+
                     for selector in grade_link_selectors:
                         try:
                             loc = page.locator(selector)
                             count = await loc.count()
-                            update_job_log(f"Selector '{selector}' found {count} elements")
+                            update_job_log(
+                                f"Selector '{selector}' found {count} elements"
+                            )
                             if count > 0:
                                 # Click the first matching one
                                 await loc.first.click()
@@ -2468,16 +2686,20 @@ async def efundi_download_and_assess(
                         except Exception as e:
                             update_job_log(f"Selector error: {e}")
                             continue
-                
+
                 # If still not clicked, try a more general approach but be specific about the action
                 if not grade_clicked:
-                    update_job_log("Trying to find Grade link with doGrade_assignment action...")
-                    
+                    update_job_log(
+                        "Trying to find Grade link with doGrade_assignment action..."
+                    )
+
                     # Get all links and find ones with the correct action
                     grade_links = page.locator("a[onclick*='doGrade_assignment']")
                     count = await grade_links.count()
-                    update_job_log(f"Found {count} Grade links with doGrade_assignment action")
-                    
+                    update_job_log(
+                        f"Found {count} Grade links with doGrade_assignment action"
+                    )
+
                     if count > 0:
                         # If we have an assignment name, try to find the right one
                         if assignment_name:
@@ -2487,40 +2709,54 @@ async def efundi_download_and_assess(
                                 text = await link.inner_text()
                                 update_job_log(f"Grade link {i}: text='{text}'")
                                 # The assignment name might be in the onclick or nearby
-                                if assignment_name.lower().replace(' ', '') in onclick.lower().replace(' ', ''):
+                                if assignment_name.lower().replace(
+                                    " ", ""
+                                ) in onclick.lower().replace(" ", ""):
                                     await link.click()
                                     await page.wait_for_timeout(4000)
                                     grade_clicked = True
-                                    update_job_log(f"Clicked Grade link {i} for {assignment_name}")
+                                    update_job_log(
+                                        f"Clicked Grade link {i} for {assignment_name}"
+                                    )
                                     break
-                        
+
                         # If still not clicked, click the last one (Assignment 1 is typically at the bottom)
                         if not grade_clicked:
                             await grade_links.last.click()
                             await page.wait_for_timeout(4000)
                             grade_clicked = True
-                            update_job_log("Clicked last Grade link (likely Assignment 1)")
-                
+                            update_job_log(
+                                "Clicked last Grade link (likely Assignment 1)"
+                            )
+
                 if not grade_clicked:
-                    await page.screenshot(path=str(debug_dir / f"{job_id}_03_no_grade.png"), full_page=True)
+                    await page.screenshot(
+                        path=str(debug_dir / f"{job_id}_03_no_grade.png"),
+                        full_page=True,
+                    )
                     raise Exception("Could not find Grade link for any assignment")
-                
-                await page.screenshot(path=str(debug_dir / f"{job_id}_03_after_grade_click.png"), full_page=True)
+
+                await page.screenshot(
+                    path=str(debug_dir / f"{job_id}_03_after_grade_click.png"),
+                    full_page=True,
+                )
                 current_url = page.url
                 update_job_log(f"Current URL after Grade click: {current_url}")
-                
+
                 # Verify we're on the submissions page, not Gradebook
-                if 'Gradebook' in await page.title() or '/tool/9f40a622' in current_url:
-                    update_job_log("WARNING: Landed on Gradebook instead of submissions page!")
+                if "Gradebook" in await page.title() or "/tool/9f40a622" in current_url:
+                    update_job_log(
+                        "WARNING: Landed on Gradebook instead of submissions page!"
+                    )
                     # Go back and try a different approach
                     await page.go_back()
                     await page.wait_for_timeout(2000)
-                
+
                 # Step 4: Now we should be on the grading/submissions page
                 # Look for "Download All" link
                 update_job_log("Looking for Download All on grading page...")
                 update_status("finding_download")
-                
+
                 download_all_found = False
                 download_all_selectors = [
                     "a:has-text('Download All')",
@@ -2529,9 +2765,9 @@ async def efundi_download_and_assess(
                     "a[href*='downloadAll']",
                     "a.navIntraTool:has-text('Download')",
                     "span:has-text('Download All') a",
-                    "input[value='Download All']"
+                    "input[value='Download All']",
                 ]
-                
+
                 for selector in download_all_selectors:
                     try:
                         loc = page.locator(selector)
@@ -2546,17 +2782,20 @@ async def efundi_download_and_assess(
                     except Exception as e:
                         update_job_log(f"Selector error: {e}")
                         continue
-                
-                await page.screenshot(path=str(debug_dir / f"{job_id}_04_download_page.png"), full_page=True)
-                
+
+                await page.screenshot(
+                    path=str(debug_dir / f"{job_id}_04_download_page.png"),
+                    full_page=True,
+                )
+
                 download_all_selectors = [
                     "a:has-text('Download All')",
                     "a.actionLink:has-text('Download')",
                     "a[href*='downloadAll']",
                     "span:has-text('Download All') a",
-                    ".navIntraTool a:has-text('Download')"
+                    ".navIntraTool a:has-text('Download')",
                 ]
-                
+
                 download_all_found = False
                 for selector in download_all_selectors:
                     try:
@@ -2569,79 +2808,106 @@ async def efundi_download_and_assess(
                             break
                     except:
                         continue
-                
+
                 if not download_all_found:
                     # Maybe we're already on the download page, or it's in a different location
-                    update_job_log("Download All link not found with standard selectors")
+                    update_job_log(
+                        "Download All link not found with standard selectors"
+                    )
                     # Check if we can see the download options already
-                    if await page.locator("input#selectall, input[value='all']").count() > 0:
+                    if (
+                        await page.locator(
+                            "input#selectall, input[value='all']"
+                        ).count()
+                        > 0
+                    ):
                         update_job_log("Already on download options page")
                         download_all_found = True
-                
-                await page.screenshot(path=str(debug_dir / f"{job_id}_04_download_page.png"), full_page=True)
-                
+
+                await page.screenshot(
+                    path=str(debug_dir / f"{job_id}_04_download_page.png"),
+                    full_page=True,
+                )
+
                 if not download_all_found:
                     # Provide detailed error with page content
                     page_title = await page.title()
                     page_url = page.url
                     update_job_log(f"Page title: {page_title}, URL: {page_url}")
-                    raise Exception(f"Could not find Download All. Check debug screenshots in {debug_dir}")
-                
+                    raise Exception(
+                        f"Could not find Download All. Check debug screenshots in {debug_dir}"
+                    )
+
                 # Step 5: Select download options
                 update_job_log("Selecting download options...")
                 update_status("selecting_options")
-                
+
                 # Check "All" checkbox
-                all_checkbox = page.locator("input#selectall, input[type='checkbox'][name='selectall'], input[value='all']")
+                all_checkbox = page.locator(
+                    "input#selectall, input[type='checkbox'][name='selectall'], input[value='all']"
+                )
                 if await all_checkbox.count() > 0:
                     await all_checkbox.first.check()
                     update_job_log("Checked 'All' checkbox")
-                
+
                 # Check "Student submission attachment(s)"
-                student_attach = page.locator("input#withSubmission, input[name='withSubmission']")
+                student_attach = page.locator(
+                    "input#withSubmission, input[name='withSubmission']"
+                )
                 if await student_attach.count() > 0:
                     await student_attach.first.check()
                     update_job_log("Checked student submissions")
-                
+
                 # Check "Grade file"
                 grade_file = page.locator("input#withGrade, input[name='withGrade']")
                 if await grade_file.count() > 0:
                     await grade_file.first.check()
                     update_job_log("Checked grade file")
-                
+
                 # Select CSV format
-                csv_radio = page.locator("input[type='radio'][value='csv'], input#csvFormat")
+                csv_radio = page.locator(
+                    "input[type='radio'][value='csv'], input#csvFormat"
+                )
                 if await csv_radio.count() > 0:
                     await csv_radio.first.check()
                     update_job_log("Selected CSV format")
-                
+
                 # Check "Feedback comments"
-                feedback_comments = page.locator("input#withFeedbackText, input[name='withFeedbackText']")
+                feedback_comments = page.locator(
+                    "input#withFeedbackText, input[name='withFeedbackText']"
+                )
                 if await feedback_comments.count() > 0:
                     await feedback_comments.first.check()
                     update_job_log("Checked feedback comments")
-                
+
                 # Check "Feedback Attachment(s)"
-                feedback_attach = page.locator("input#withFeedbackAttach, input[name='withFeedbackAttach']")
+                feedback_attach = page.locator(
+                    "input#withFeedbackAttach, input[name='withFeedbackAttach']"
+                )
                 if await feedback_attach.count() > 0:
                     await feedback_attach.first.check()
                     update_job_log("Checked feedback attachments")
-                
+
                 # Check "Include students who have not yet submitted"
-                non_submit = page.locator("input#withoutSubmission, input[name='withoutSubmission']")
+                non_submit = page.locator(
+                    "input#withoutSubmission, input[name='withoutSubmission']"
+                )
                 if await non_submit.count() > 0:
                     await non_submit.first.check()
                     update_job_log("Checked include non-submitters")
-                
+
                 await page.wait_for_timeout(1000)
-                await page.screenshot(path=str(debug_dir / f"{job_id}_05_options_selected.png"), full_page=True)
-                
+                await page.screenshot(
+                    path=str(debug_dir / f"{job_id}_05_options_selected.png"),
+                    full_page=True,
+                )
+
                 # Step 6: Click Download button
                 update_job_log("Clicking Download button...")
                 update_status("downloading_zip")
-                
+
                 zip_path = UPLOAD_DIR / f"efundi_{job_id}.zip"
-                
+
                 # The download button is a button with class "active" or text "Download"
                 download_btn_selectors = [
                     "button.active:has-text('Download')",
@@ -2649,15 +2915,17 @@ async def efundi_download_and_assess(
                     "input[type='submit'][value='Download']",
                     "input.active[type='submit']",
                     "form button.active",
-                    "input[name='eventSubmit_doDownload_all']"
+                    "input[name='eventSubmit_doDownload_all']",
                 ]
-                
+
                 download_btn = None
                 for selector in download_btn_selectors:
                     try:
                         loc = page.locator(selector)
                         count = await loc.count()
-                        update_job_log(f"Download button selector '{selector}' found {count} elements")
+                        update_job_log(
+                            f"Download button selector '{selector}' found {count} elements"
+                        )
                         if count > 0:
                             download_btn = loc.first
                             update_job_log(f"Found Download button with: {selector}")
@@ -2665,69 +2933,82 @@ async def efundi_download_and_assess(
                     except Exception as e:
                         update_job_log(f"Button selector error: {e}")
                         continue
-                
+
                 if not download_btn:
-                    await page.screenshot(path=str(debug_dir / f"{job_id}_06_no_download_btn.png"), full_page=True)
+                    await page.screenshot(
+                        path=str(debug_dir / f"{job_id}_06_no_download_btn.png"),
+                        full_page=True,
+                    )
                     raise Exception("Could not find Download button")
-                
+
                 # Wait for download
                 try:
-                    async with page.expect_download(timeout=180000) as download_info:  # 3 min timeout
+                    async with page.expect_download(
+                        timeout=180000
+                    ) as download_info:  # 3 min timeout
                         await download_btn.click()
                         update_job_log("Waiting for download to complete...")
-                    
+
                     download = await download_info.value
                     await download.save_as(str(zip_path))
                     update_job_log(f"Downloaded ZIP to: {zip_path}")
                 except Exception as e:
-                    await page.screenshot(path=str(debug_dir / f"{job_id}_07_download_error.png"), full_page=True)
+                    await page.screenshot(
+                        path=str(debug_dir / f"{job_id}_07_download_error.png"),
+                        full_page=True,
+                    )
                     raise Exception(f"Download failed: {e}")
-                
+
                 await browser.close()
-                
+
                 # Step 7: Process the downloaded ZIP
                 update_job_log("Processing downloaded submissions...")
                 update_status("processing")
                 jobs_collection.update_one(
-                    {"job_id": job_id},
-                    {"$set": {"zip_file": str(zip_path)}}
+                    {"job_id": job_id}, {"$set": {"zip_file": str(zip_path)}}
                 )
-                
+
                 output_dir = OUTPUT_DIR / job_id
                 output_dir.mkdir(parents=True, exist_ok=True)
-                
+
                 results = await process_efundi_zip(zip_path, rubric, output_dir)
-                update_job_log(f"Processed {results.get('submissions_processed', 0)} submissions")
-                
+                update_job_log(
+                    f"Processed {results.get('submissions_processed', 0)} submissions"
+                )
+
                 jobs_collection.update_one(
                     {"job_id": job_id},
-                    {"$set": {
-                        "status": "completed",
-                        "results": results,
-                        "completed_at": datetime.now(timezone.utc).isoformat()
-                    }}
+                    {
+                        "$set": {
+                            "status": "completed",
+                            "results": results,
+                            "completed_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    },
                 )
                 update_job_log("Job completed successfully!")
-                
+
         except Exception as e:
             error_msg = str(e)
             print(f"[eFundi Download Error] {error_msg}")
             update_job_log(f"ERROR: {error_msg}")
             jobs_collection.update_one(
                 {"job_id": job_id},
-                {"$set": {
-                    "status": "failed",
-                    "error": error_msg,
-                    "completed_at": datetime.now(timezone.utc).isoformat()
-                }}
+                {
+                    "$set": {
+                        "status": "failed",
+                        "error": error_msg,
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
             )
-    
+
     background_tasks.add_task(download_and_process)
-    
+
     return {
         "success": True,
         "job_id": job_id,
-        "message": "Download and assessment started. Check /api/job/{job_id} for status."
+        "message": "Download and assessment started. Check /api/job/{job_id} for status.",
     }
 
 
@@ -2736,83 +3017,86 @@ async def efundi_upload_results(job_id: str, background_tasks: BackgroundTasks):
     """Upload graded results back to eFundi."""
     if not PLAYWRIGHT_AVAILABLE:
         raise HTTPException(status_code=500, detail="Playwright not available")
-    
+
     # Get job
     job = jobs_collection.find_one({"job_id": job_id})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     if job.get("status") != "completed":
         raise HTTPException(status_code=400, detail="Job not completed yet")
-    
+
     results = job.get("results", {})
     output_zip = results.get("output_zip_path")
-    
+
     if not output_zip or not Path(output_zip).exists():
         raise HTTPException(status_code=404, detail="Output ZIP not found")
-    
+
     # Get session
     session = efundi_sessions.find_one({}, sort=[("authenticated_at", -1)])
     if not session:
         raise HTTPException(status_code=401, detail="Not authenticated with eFundi")
-    
+
     assignment_url = job.get("assignment_url")
     if not assignment_url:
         raise HTTPException(status_code=400, detail="Assignment URL not found in job")
-    
+
     async def upload_to_efundi():
         try:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context(storage_state=session["storage_state"])
+                context = await browser.new_context(
+                    storage_state=session["storage_state"]
+                )
                 page = await context.new_page()
-                
+
                 await page.goto(assignment_url, wait_until="domcontentloaded")
                 await page.wait_for_timeout(3000)
-                
+
                 # Click Upload All
                 upload_all = page.locator("a:has-text('Upload All')")
                 if await upload_all.count() > 0:
                     await upload_all.first.click()
                     await page.wait_for_timeout(2000)
-                
+
                 # Upload file
                 file_input = page.locator("input[type='file']").first
                 await file_input.set_input_files(output_zip)
-                
+
                 # Click Upload button
-                upload_btn = page.locator("button:has-text('Upload'), input[type='submit'][value='Upload']")
+                upload_btn = page.locator(
+                    "button:has-text('Upload'), input[type='submit'][value='Upload']"
+                )
                 await upload_btn.first.click()
                 await page.wait_for_timeout(5000)
-                
+
                 await browser.close()
-                
+
                 jobs_collection.update_one(
                     {"job_id": job_id},
-                    {"$set": {
-                        "upload_status": "completed",
-                        "uploaded_at": datetime.now(timezone.utc).isoformat()
-                    }}
+                    {
+                        "$set": {
+                            "upload_status": "completed",
+                            "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    },
                 )
-                
+
         except Exception as e:
             jobs_collection.update_one(
                 {"job_id": job_id},
-                {"$set": {
-                    "upload_status": "failed",
-                    "upload_error": str(e)
-                }}
+                {"$set": {"upload_status": "failed", "upload_error": str(e)}},
             )
-    
+
     background_tasks.add_task(upload_to_efundi)
-    
+
     return {
         "success": True,
-        "message": "Upload started. Results will be uploaded to eFundi."
+        "message": "Upload started. Results will be uploaded to eFundi.",
     }
 
-
 # ===================== EXAM BUILDER =====================
+
 
 class ExamTopic(BaseModel):
     topic: str
@@ -2820,20 +3104,23 @@ class ExamTopic(BaseModel):
     key_events: Optional[List[str]] = None
     key_figures: Optional[List[str]] = None
 
+
 class ExamGenerationRequest(BaseModel):
     module_code: str = "HISE411"
     module_name: str = "HISTORY SNR & FET 4A"
     topics: List[str]  # Topics for source-based questions
-    essay_topic: str   # Topic for the essay question
+    essay_topic: str  # Topic for the essay question
     methodology_topic: str  # Topic for methodology question
     total_marks: int = 125
     duration_hours: int = 3
     additional_instructions: Optional[str] = None
 
 
-async def generate_exam_sources(topic: str, question_number: int, opportunity: int = 1) -> Dict[str, Any]:
+async def generate_exam_sources(
+    topic: str, question_number: int, opportunity: int=1
+) -> Dict[str, Any]:
     """Generate legitimate historical sources for a source-based question."""
-    
+
     variation_instruction = ""
     if opportunity == 2:
         variation_instruction = """
@@ -2842,7 +3129,7 @@ IMPORTANT: This is for a SECOND OPPORTUNITY exam. Generate DIFFERENT sources tha
 - Choose different perspectives or lesser-known documents
 - Include different visual sources (different cartoons, maps, or photographs)
 - Maintain the same academic rigor but with fresh material"""
-    
+
     prompt = f"""You are a History exam creator. Generate authentic historical sources for a source-based question on: "{topic}"
 {variation_instruction}
 
@@ -2882,28 +3169,35 @@ Respond in JSON format:
         response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are a History education expert who creates authentic, academically rigorous exam materials using real historical sources."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": "You are a History education expert who creates authentic, academically rigorous exam materials using real historical sources.",
+                },
+                {"role": "user", "content": prompt},
             ],
             temperature=0.7,
             max_tokens=3000,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
-        
+
         return json.loads(response.choices[0].message.content)
     except Exception as e:
         print(f"[Exam Source Generation Error] {e}")
         return {"topic": topic, "sources": [], "error": str(e)}
 
 
-async def generate_source_questions(sources: List[Dict], topic: str, total_marks: int = 25) -> List[Dict]:
+async def generate_source_questions(
+    sources: List[Dict], topic: str, total_marks: int=25
+) -> List[Dict]:
     """Generate questions based on the provided sources."""
-    
-    sources_text = "\n\n".join([
-        f"{s['label']}: {s['type']} - {s.get('title', '')} by {s.get('author', 'Unknown')} ({s.get('date', '')})\n{s.get('content', '')}"
-        for s in sources
-    ])
-    
+
+    sources_text = "\n\n".join(
+        [
+            f"{s['label']}: {s['type']} - {s.get('title', '')} by {s.get('author', 'Unknown')} ({s.get('date', '')})\n{s.get('content', '')}"
+            for s in sources
+        ]
+    )
+
     prompt = f"""Create source-based questions for a History exam on "{topic}".
 
 SOURCES PROVIDED:
@@ -2940,23 +3234,26 @@ Respond in JSON format:
         response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are a History exam question writer. Create clear, academically appropriate questions that test historical thinking skills."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": "You are a History exam question writer. Create clear, academically appropriate questions that test historical thinking skills.",
+                },
+                {"role": "user", "content": prompt},
             ],
             temperature=0.6,
             max_tokens=2500,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
-        
+
         return json.loads(response.choices[0].message.content)
     except Exception as e:
         print(f"[Question Generation Error] {e}")
         return {"questions": [], "error": str(e)}
 
 
-async def generate_methodology_question(topic: str, marks: int = 25) -> Dict[str, Any]:
+async def generate_methodology_question(topic: str, marks: int=25) -> Dict[str, Any]:
     """Generate a methodology question for trainee teachers."""
-    
+
     prompt = f"""Create a methodology question for History education students (B.Ed.) on the topic: "{topic}"
 
 The question should ask students to create a lesson plan or teaching resource. Include:
@@ -3013,23 +3310,28 @@ Respond in JSON format:
         response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are an education expert creating assessment materials for trainee History teachers."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": "You are an education expert creating assessment materials for trainee History teachers.",
+                },
+                {"role": "user", "content": prompt},
             ],
             temperature=0.6,
             max_tokens=2000,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
-        
+
         return json.loads(response.choices[0].message.content)
     except Exception as e:
         print(f"[Methodology Question Error] {e}")
         return {"error": str(e)}
 
 
-async def generate_essay_question(topic: str, marks: int = 50, opportunity: int = 1) -> Dict[str, Any]:
+async def generate_essay_question(
+    topic: str, marks: int=50, opportunity: int=1
+) -> Dict[str, Any]:
     """Generate an essay question with marking matrix."""
-    
+
     variation_instruction = ""
     if opportunity == 2:
         variation_instruction = """
@@ -3038,7 +3340,7 @@ IMPORTANT: This is for a SECOND OPPORTUNITY exam. Create a DIFFERENT essay quest
 - Ask about different aspects (e.g., if first asks about causes, this should ask about consequences)
 - Phrase the question differently while maintaining the same academic rigor
 - The essay matrix/rubric can remain the same"""
-    
+
     prompt = f"""Create a {marks}-mark essay question for a History exam on the topic: "{topic}"
 {variation_instruction}
 
@@ -3115,14 +3417,17 @@ Respond in JSON format:
         response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are a History education expert creating rigorous essay questions."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": "You are a History education expert creating rigorous essay questions.",
+                },
+                {"role": "user", "content": prompt},
             ],
             temperature=0.7,
             max_tokens=2500,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
-        
+
         return json.loads(response.choices[0].message.content)
     except Exception as e:
         print(f"[Essay Question Error] {e}")
@@ -3131,194 +3436,319 @@ Respond in JSON format:
 
 def create_exam_docx(exam_data: Dict[str, Any], output_path: Path) -> Path:
     """Generate a formatted DOCX exam paper."""
-    
+
     if not DOCX_AVAILABLE:
         raise HTTPException(status_code=500, detail="python-docx not available")
-    
-    from docx.shared import Inches, Cm
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
     from docx.enum.table import WD_TABLE_ALIGNMENT
-    
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
     doc = Document()
-    
+
     # Set up styles
-    style = doc.styles['Normal']
-    font = style.font
-    font.name = 'Times New Roman'
+    style = doc.styles["Normal"]
+    font = style.font  # type: ignore[attr-defined]
+    font.name = "Times New Roman"
     font.size = Pt(12)
-    
+
     # ===== HEADER =====
     header = doc.add_paragraph()
     header.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = header.add_run(f"{exam_data['module_code']}: {exam_data['module_name']}")
     run.bold = True
     run.font.size = Pt(16)
-    
+
     # Add opportunity label if present
-    if exam_data.get('opportunity_label'):
+    if exam_data.get("opportunity_label"):
         opp_para = doc.add_paragraph()
         opp_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = opp_para.add_run(f"({exam_data['opportunity_label']})")
         run.bold = True
         run.font.size = Pt(12)
-    
+
     # Exam details table
     details_table = doc.add_table(rows=4, cols=2)
     details_table.alignment = WD_TABLE_ALIGNMENT.CENTER
     details = [
         ("Duration:", f"{exam_data['duration_hours']} hours"),
-        ("Total Marks:", str(exam_data['total_marks'])),
+        ("Total Marks:", str(exam_data["total_marks"])),
         ("Date:", datetime.now().strftime("%B %Y")),
-        ("Instructions:", "Answer ALL questions")
+        ("Instructions:", "Answer ALL questions"),
     ]
     for i, (label, value) in enumerate(details):
         details_table.rows[i].cells[0].text = label
         details_table.rows[i].cells[1].text = value
-    
+
     doc.add_paragraph()  # Spacer
-    
+
     # ===== SECTION 1: SOURCE-BASED QUESTIONS =====
-    for q_num, source_question in enumerate(exam_data.get('source_questions', []), 1):
+    for q_num, source_question in enumerate(exam_data.get("source_questions", []), 1):
         # Question header
         q_header = doc.add_paragraph()
-        run = q_header.add_run(f"QUESTION {q_num}: {source_question.get('topic', 'Source-Based Question')}")
+        run = q_header.add_run(
+            f"QUESTION {q_num}: {source_question.get('topic', 'Source-Based Question')}"
+        )
         run.bold = True
         run.font.size = Pt(14)
-        
+
         marks_para = doc.add_paragraph()
-        marks_para.add_run(f"[{source_question.get('total_marks', 25)} marks]").italic = True
-        
+        marks_para.add_run(
+            f"[{source_question.get('total_marks', 25)} marks]"
+        ).italic = True
+
         # Sources
-        for source in source_question.get('sources', []):
+        for source in source_question.get("sources", []):
             source_para = doc.add_paragraph()
             source_para.add_run(f"{source['label']}: ").bold = True
             source_para.add_run(f"{source.get('type', '')} - {source.get('title', '')}")
-            
-            if source.get('author'):
-                doc.add_paragraph(f"Author/Origin: {source['author']}, {source.get('date', '')}")
-            
+
+            if source.get("author"):
+                doc.add_paragraph(
+                    f"Author/Origin: {source['author']}, {source.get('date', '')}"
+                )
+
             content_para = doc.add_paragraph()
-            content_para.add_run(source.get('content', '')).italic = True
-            
-            if source.get('context'):
+            content_para.add_run(source.get("content", "")).italic = True
+
+            if source.get("context"):
                 ctx = doc.add_paragraph()
                 ctx.add_run(f"Context: {source['context']}").font.size = Pt(10)
-            
+
             doc.add_paragraph()  # Spacer
-        
+
         # Questions
         questions_header = doc.add_paragraph()
-        questions_header.add_run("Study the sources above and answer the following questions:").bold = True
-        
-        for q in source_question.get('questions', []):
+        questions_header.add_run(
+            "Study the sources above and answer the following questions:"
+        ).bold = True
+
+        for q in source_question.get("questions", []):
             q_para = doc.add_paragraph()
             q_para.add_run(f"{q['number']} ")
-            if q.get('source_reference'):
+            if q.get("source_reference"):
                 q_para.add_run(f"[{q['source_reference']}] ")
-            q_para.add_run(q['question'])
+            q_para.add_run(q["question"])
             q_para.add_run(f" ({q['marks']})").bold = True
-        
+
         doc.add_paragraph()  # Spacer
         doc.add_paragraph("_" * 60)
-    
+
     # ===== SECTION 2: METHODOLOGY =====
-    if exam_data.get('methodology_question'):
-        mq = exam_data['methodology_question']
-        
+    if exam_data.get("methodology_question"):
+        mq = exam_data["methodology_question"]
+
         m_header = doc.add_paragraph()
-        run = m_header.add_run(f"QUESTION {len(exam_data.get('source_questions', [])) + 1}: METHODOLOGY")
+        run = m_header.add_run(
+            f"QUESTION {len(exam_data.get('source_questions', [])) + 1}: METHODOLOGY"
+        )
         run.bold = True
         run.font.size = Pt(14)
-        
+
         marks_para = doc.add_paragraph()
         marks_para.add_run(f"[{mq.get('marks', 25)} marks]").italic = True
-        
+
         task_para = doc.add_paragraph()
-        task_para.add_run(mq.get('task', ''))
-        
-        if mq.get('requirements'):
+        task_para.add_run(mq.get("task", ""))
+
+        if mq.get("requirements"):
             req_para = doc.add_paragraph()
             req_para.add_run("Your response must address:").bold = True
-            for req in mq['requirements']:
-                doc.add_paragraph(f"• {req}", style='List Bullet')
-        
+            for req in mq["requirements"]:
+                doc.add_paragraph(f"• {req}", style="List Bullet")
+
         # Rubric table
-        if mq.get('rubric'):
+        if mq.get("rubric"):
             doc.add_paragraph()
             rubric_header = doc.add_paragraph()
-            rubric_header.add_run("Marking Rubric:").bold = True
-            
-            rubric = mq['rubric']
+            rubric_header.add_run("Detailed Marking Rubric:").bold = True
+
+            rubric = mq["rubric"]
             table = doc.add_table(rows=len(rubric) + 1, cols=4)
-            table.style = 'Table Grid'
-            
+            table.style = "Table Grid"
+
             # Header row
-            headers = ['Criterion', '3 Marks', '2 Marks', '1 Mark']
+            headers = [
+                "Criterion",
+                "3 Marks (Excellent)",
+                "2 Marks (Good)",
+                "1 Mark (Basic)",
+            ]
             for i, h in enumerate(headers):
-                table.rows[0].cells[i].text = h
-                table.rows[0].cells[i].paragraphs[0].runs[0].bold = True
-            
+                cell = table.rows[0].cells[i]
+                cell.text = h
+                cell.paragraphs[0].runs[0].bold = True
+                # Shade header row
+                from docx.oxml import parse_xml
+                from docx.oxml.ns import nsdecls
+
+                shading_elm = parse_xml(f'<w:shd {nsdecls("w")} w:fill="D9E2F3"/>')
+                cell._tc.get_or_add_tcPr().append(shading_elm)
+
             # Data rows
             for row_idx, (criterion, levels) in enumerate(rubric.items(), 1):
                 table.rows[row_idx].cells[0].text = criterion
-                table.rows[row_idx].cells[1].text = levels.get('3 marks', '')
-                table.rows[row_idx].cells[2].text = levels.get('2 marks', '')
-                table.rows[row_idx].cells[3].text = levels.get('1 mark', '')
-        
+                table.rows[row_idx].cells[1].text = levels.get("3 marks", "")
+                table.rows[row_idx].cells[2].text = levels.get("2 marks", "")
+                table.rows[row_idx].cells[3].text = levels.get("1 mark", "")
+
+        # Marking notes
         doc.add_paragraph()
+        notes = doc.add_paragraph()
+        notes.add_run("Marking Notes:").bold = True
+        doc.add_paragraph(
+            "• Award marks holistically based on overall quality", style="List Bullet"
+        )
+        doc.add_paragraph(
+            "• Consider creativity and practical applicability", style="List Bullet"
+        )
+        doc.add_paragraph(
+            "• Historical accuracy of content is essential", style="List Bullet"
+        )
+
         doc.add_paragraph("_" * 60)
-    
+
     # ===== SECTION 3: ESSAY =====
-    if exam_data.get('essay_question'):
-        eq = exam_data['essay_question']
-        
+    if exam_data.get("essay_question"):
+        eq = exam_data["essay_question"]
+
         e_header = doc.add_paragraph()
-        q_num = len(exam_data.get('source_questions', [])) + 2
+        q_num = len(exam_data.get("source_questions", [])) + 2
         run = e_header.add_run(f"QUESTION {q_num}: ESSAY")
         run.bold = True
         run.font.size = Pt(14)
-        
+
         marks_para = doc.add_paragraph()
         marks_para.add_run(f"[{eq.get('marks', 50)} marks]").italic = True
-        
-        if eq.get('context'):
+
+        if eq.get("context"):
             ctx = doc.add_paragraph()
-            ctx.add_run(eq['context']).italic = True
-        
+            ctx.add_run(eq["context"]).italic = True
+
         q_para = doc.add_paragraph()
-        q_para.add_run(eq.get('question', ''))
-        
+        q_para.add_run(eq.get("question", ""))
+
         # Essay matrix
-        if eq.get('matrix'):
+        if eq.get("matrix"):
             doc.add_paragraph()
             matrix_header = doc.add_paragraph()
-            matrix_header.add_run("Essay Assessment Matrix:").bold = True
-            
-            matrix = eq['matrix']
+            matrix_header.add_run("ESSAY ASSESSMENT MATRIX:").bold = True
+            matrix_header.runs[0].font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
+
+            matrix = eq["matrix"]
+
+            # Create comprehensive table
             table = doc.add_table(rows=len(matrix) + 1, cols=5)
-            table.style = 'Table Grid'
-            
-            # Header
-            headers = ['Criterion', 'Excellent', 'Good', 'Satisfactory', 'Needs Work']
+            table.style = "Table Grid"
+
+            # Header with mark ranges
+            headers = [
+                "Criterion (Weight)",
+                "Excellent",
+                "Good",
+                "Satisfactory",
+                "Needs Improvement",
+            ]
             for i, h in enumerate(headers):
-                table.rows[0].cells[i].text = h
-                table.rows[0].cells[i].paragraphs[0].runs[0].bold = True
-            
-            # Data
+                cell = table.rows[0].cells[i]
+                cell.text = h
+                cell.paragraphs[0].runs[0].bold = True
+                # Shade header
+                from docx.oxml import parse_xml
+                from docx.oxml.ns import nsdecls
+
+                shading_elm = parse_xml(f'<w:shd {nsdecls("w")} w:fill="FDE9D9"/>')
+                cell._tc.get_or_add_tcPr().append(shading_elm)
+
+            # Data rows with full descriptors
             for row_idx, (criterion, data) in enumerate(matrix.items(), 1):
-                table.rows[row_idx].cells[0].text = f"{criterion} ({data.get('weight', '')})"
-                levels = data.get('levels', {})
-                for col_idx, level_name in enumerate(['Excellent', 'Good', 'Satisfactory', 'Needs Work']):
-                    matching_key = [k for k in levels.keys() if level_name.lower() in k.lower()]
+                weight = data.get("weight", 0)
+                table.rows[row_idx].cells[0].text = f"{criterion}\n({weight} marks)"
+
+                levels = data.get("levels", {})
+                level_names = ["Excellent", "Good", "Satisfactory", "Needs Work"]
+
+                for col_idx, level_name in enumerate(level_names):
+                    matching_key = [
+                        k for k in levels.keys() if level_name.lower() in k.lower()
+                    ]
                     if matching_key:
-                        table.rows[row_idx].cells[col_idx + 1].text = levels[matching_key[0]]
-    
+                        # Include mark range in cell
+                        key = matching_key[0]
+                        # Extract mark range from key if present
+                        mark_range = ""
+                        import re
+
+                        range_match = re.search(r"\(([^)]+)\)", key)
+                        if range_match:
+                            mark_range = f"[{range_match.group(1)}]\n"
+                        table.rows[row_idx].cells[
+                            col_idx + 1
+                        ].text = f"{mark_range}{levels[key]}"
+
+            doc.add_paragraph()
+
+            # Marking guidelines
+            guide_header = doc.add_paragraph()
+            guide_header.add_run("Essay Marking Guidelines:").bold = True
+
+            doc.add_paragraph(
+                "1. Read the entire essay before assigning marks", style="List Bullet"
+            )
+            doc.add_paragraph(
+                "2. Assess each criterion independently using the matrix",
+                style="List Bullet",
+            )
+            doc.add_paragraph(
+                "3. Use the full range of marks within each level", style="List Bullet"
+            )
+            doc.add_paragraph(
+                "4. Provide written feedback highlighting strengths and areas for improvement",
+                style="List Bullet",
+            )
+            doc.add_paragraph(
+                "5. Total marks = sum of all criteria scores", style="List Bullet"
+            )
+
+            # Mark calculation box
+            doc.add_paragraph()
+            calc_header = doc.add_paragraph()
+            calc_header.add_run("Mark Calculation:").bold = True
+
+            calc_table = doc.add_table(rows=len(matrix) + 2, cols=2)
+            calc_table.style = "Table Grid"
+
+            calc_table.rows[0].cells[0].text = "Criterion"
+            calc_table.rows[0].cells[1].text = "Score"
+            calc_table.rows[0].cells[0].paragraphs[0].runs[0].bold = True
+            calc_table.rows[0].cells[1].paragraphs[0].runs[0].bold = True
+
+            for row_idx, (criterion, data) in enumerate(matrix.items(), 1):
+                calc_table.rows[row_idx].cells[
+                    0
+                ].text = f"{criterion} (max {data.get('weight', 0)})"
+                calc_table.rows[row_idx].cells[1].text = "_____ / " + str(
+                    data.get("weight", 0)
+                )
+
+            # Total row
+            total_row = len(matrix) + 1
+            calc_table.rows[total_row].cells[0].text = "TOTAL"
+            calc_table.rows[total_row].cells[0].paragraphs[0].runs[0].bold = True
+            calc_table.rows[total_row].cells[1].text = f"_____ / {eq.get('marks', 50)}"
+            calc_table.rows[total_row].cells[1].paragraphs[0].runs[0].bold = True
+
     # ===== FOOTER =====
     doc.add_paragraph()
     footer = doc.add_paragraph()
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer.add_run(f"TOTAL: {exam_data['total_marks']} marks").bold = True
-    
+
+    confidential = doc.add_paragraph()
+    confidential.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = confidential.add_run("CONFIDENTIAL - FOR EXAMINER USE ONLY")
+    run.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
+    run.bold = True
+
     # Save
     doc.save(str(output_path))
     return output_path
@@ -3326,250 +3756,296 @@ def create_exam_docx(exam_data: Dict[str, Any], output_path: Path) -> Path:
 
 def create_memorandum_docx(exam_data: Dict[str, Any], output_path: Path) -> Path:
     """Generate a memorandum/answer key document for the exam."""
-    
+
     if not DOCX_AVAILABLE:
         raise HTTPException(status_code=500, detail="python-docx not available")
-    
-    from docx.shared import Inches, Cm
+
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.enum.table import WD_TABLE_ALIGNMENT
-    
+
     doc = Document()
-    
+
     # Set up styles
-    style = doc.styles['Normal']
+    style = doc.styles["Normal"]
     font = style.font
-    font.name = 'Times New Roman'
+    font.name = "Times New Roman"
     font.size = Pt(12)
-    
+
     # ===== HEADER =====
     header = doc.add_paragraph()
     header.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = header.add_run(f"{exam_data['module_code']}: {exam_data['module_name']}")
     run.bold = True
     run.font.size = Pt(16)
-    
+
     # Add opportunity label if present
-    if exam_data.get('opportunity_label'):
+    if exam_data.get("opportunity_label"):
         opp_para = doc.add_paragraph()
         opp_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = opp_para.add_run(f"({exam_data['opportunity_label']})")
         run.bold = True
         run.font.size = Pt(12)
-    
+
     memo_title = doc.add_paragraph()
     memo_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = memo_title.add_run("MEMORANDUM / MARKING GUIDE")
     run.bold = True
     run.font.size = Pt(14)
     run.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)  # Dark red
-    
+
     doc.add_paragraph()
-    
+
     # ===== SOURCE-BASED QUESTIONS ANSWERS =====
-    for q_num, source_question in enumerate(exam_data.get('source_questions', []), 1):
+    for q_num, source_question in enumerate(exam_data.get("source_questions", []), 1):
         q_header = doc.add_paragraph()
-        run = q_header.add_run(f"QUESTION {q_num}: {source_question.get('topic', 'Source-Based Question')} - ANSWERS")
+        run = q_header.add_run(
+            f"QUESTION {q_num}: {source_question.get('topic', 'Source-Based Question')} - ANSWERS"
+        )
         run.bold = True
         run.font.size = Pt(14)
-        
+
         marks_para = doc.add_paragraph()
-        marks_para.add_run(f"[{source_question.get('total_marks', 25)} marks]").italic = True
-        
+        marks_para.add_run(
+            f"[{source_question.get('total_marks', 25)} marks]"
+        ).italic = True
+
         # Answer key for each question
-        for q in source_question.get('questions', []):
+        for q in source_question.get("questions", []):
             q_para = doc.add_paragraph()
             q_para.add_run(f"{q['number']} ").bold = True
             q_para.add_run(f"({q['marks']} marks)")
-            
+
             # Question text
             question_text = doc.add_paragraph()
             question_text.add_run(f"Question: {q['question']}").italic = True
-            
+
             # Expected answer points
-            if q.get('expected_answer_points'):
+            if q.get("expected_answer_points"):
                 answer_header = doc.add_paragraph()
                 answer_header.add_run("Expected Answer Points:").bold = True
-                
-                for point in q['expected_answer_points']:
-                    point_para = doc.add_paragraph(f"• {point}", style='List Bullet')
+
+                for point in q["expected_answer_points"]:
+                    point_para = doc.add_paragraph(f"• {point}", style="List Bullet")
                     # Color the answer points green
                     for run in point_para.runs:
                         run.font.color.rgb = RGBColor(0x00, 0x80, 0x00)
-            
+
             # Cognitive level
-            if q.get('cognitive_level'):
+            if q.get("cognitive_level"):
                 level_para = doc.add_paragraph()
-                level_para.add_run(f"Cognitive Level: {q['cognitive_level']}").font.size = Pt(10)
-            
+                level_para.add_run(
+                    f"Cognitive Level: {q['cognitive_level']}"
+                ).font.size = Pt(10)
+
             doc.add_paragraph()  # Spacer
-        
+
         doc.add_paragraph("_" * 60)
-    
+
     # ===== METHODOLOGY MARKING GUIDE =====
-    if exam_data.get('methodology_question'):
-        mq = exam_data['methodology_question']
-        
+    if exam_data.get("methodology_question"):
+        mq = exam_data["methodology_question"]
+
         m_header = doc.add_paragraph()
-        run = m_header.add_run(f"QUESTION {len(exam_data.get('source_questions', [])) + 1}: METHODOLOGY - MARKING GUIDE")
+        run = m_header.add_run(
+            f"QUESTION {len(exam_data.get('source_questions', [])) + 1}: METHODOLOGY - MARKING GUIDE"
+        )
         run.bold = True
         run.font.size = Pt(14)
-        
+
         marks_para = doc.add_paragraph()
         marks_para.add_run(f"[{mq.get('marks', 25)} marks]").italic = True
-        
+
         # Marking rubric table with detailed descriptors
-        if mq.get('rubric'):
+        if mq.get("rubric"):
             rubric_header = doc.add_paragraph()
             rubric_header.add_run("Detailed Marking Rubric:").bold = True
-            
-            rubric = mq['rubric']
+
+            rubric = mq["rubric"]
             table = doc.add_table(rows=len(rubric) + 1, cols=4)
-            table.style = 'Table Grid'
-            
+            table.style = "Table Grid"
+
             # Header row
-            headers = ['Criterion', '3 Marks (Excellent)', '2 Marks (Good)', '1 Mark (Basic)']
+            headers = [
+                "Criterion",
+                "3 Marks (Excellent)",
+                "2 Marks (Good)",
+                "1 Mark (Basic)",
+            ]
             for i, h in enumerate(headers):
                 cell = table.rows[0].cells[i]
                 cell.text = h
                 cell.paragraphs[0].runs[0].bold = True
                 # Shade header row
-                from docx.oxml.ns import nsdecls
                 from docx.oxml import parse_xml
+                from docx.oxml.ns import nsdecls
+
                 shading_elm = parse_xml(f'<w:shd {nsdecls("w")} w:fill="D9E2F3"/>')
                 cell._tc.get_or_add_tcPr().append(shading_elm)
-            
+
             # Data rows
             for row_idx, (criterion, levels) in enumerate(rubric.items(), 1):
                 table.rows[row_idx].cells[0].text = criterion
-                table.rows[row_idx].cells[1].text = levels.get('3 marks', '')
-                table.rows[row_idx].cells[2].text = levels.get('2 marks', '')
-                table.rows[row_idx].cells[3].text = levels.get('1 mark', '')
-        
+                table.rows[row_idx].cells[1].text = levels.get("3 marks", "")
+                table.rows[row_idx].cells[2].text = levels.get("2 marks", "")
+                table.rows[row_idx].cells[3].text = levels.get("1 mark", "")
+
         # Marking notes
         doc.add_paragraph()
         notes = doc.add_paragraph()
         notes.add_run("Marking Notes:").bold = True
-        doc.add_paragraph("• Award marks holistically based on overall quality", style='List Bullet')
-        doc.add_paragraph("• Consider creativity and practical applicability", style='List Bullet')
-        doc.add_paragraph("• Historical accuracy of content is essential", style='List Bullet')
-        
+        doc.add_paragraph(
+            "• Award marks holistically based on overall quality", style="List Bullet"
+        )
+        doc.add_paragraph(
+            "• Consider creativity and practical applicability", style="List Bullet"
+        )
+        doc.add_paragraph(
+            "• Historical accuracy of content is essential", style="List Bullet"
+        )
+
         doc.add_paragraph("_" * 60)
-    
+
     # ===== ESSAY MARKING MATRIX =====
-    if exam_data.get('essay_question'):
-        eq = exam_data['essay_question']
-        
+    if exam_data.get("essay_question"):
+        eq = exam_data["essay_question"]
+
         e_header = doc.add_paragraph()
-        q_num = len(exam_data.get('source_questions', [])) + 2
+        q_num = len(exam_data.get("source_questions", [])) + 2
         run = e_header.add_run(f"QUESTION {q_num}: ESSAY - MARKING MATRIX")
         run.bold = True
         run.font.size = Pt(14)
-        
+
         marks_para = doc.add_paragraph()
         marks_para.add_run(f"[{eq.get('marks', 50)} marks]").italic = True
-        
+
         # Essay question reminder
         q_para = doc.add_paragraph()
         q_para.add_run("Question: ").bold = True
-        q_para.add_run(eq.get('question', ''))
-        
+        q_para.add_run(eq.get("question", ""))
+
         doc.add_paragraph()
-        
+
         # Full Essay Assessment Matrix
-        if eq.get('matrix'):
+        if eq.get("matrix"):
             matrix_header = doc.add_paragraph()
             matrix_header.add_run("ESSAY ASSESSMENT MATRIX:").bold = True
             matrix_header.runs[0].font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
-            
-            matrix = eq['matrix']
-            
+
+            matrix = eq["matrix"]
+
             # Create comprehensive table
             table = doc.add_table(rows=len(matrix) + 1, cols=5)
-            table.style = 'Table Grid'
-            
+            table.style = "Table Grid"
+
             # Header with mark ranges
-            headers = ['Criterion (Weight)', 'Excellent', 'Good', 'Satisfactory', 'Needs Improvement']
+            headers = [
+                "Criterion (Weight)",
+                "Excellent",
+                "Good",
+                "Satisfactory",
+                "Needs Improvement",
+            ]
             for i, h in enumerate(headers):
                 cell = table.rows[0].cells[i]
                 cell.text = h
                 cell.paragraphs[0].runs[0].bold = True
                 # Shade header
-                from docx.oxml.ns import nsdecls
                 from docx.oxml import parse_xml
+                from docx.oxml.ns import nsdecls
+
                 shading_elm = parse_xml(f'<w:shd {nsdecls("w")} w:fill="FDE9D9"/>')
                 cell._tc.get_or_add_tcPr().append(shading_elm)
-            
+
             # Data rows with full descriptors
             for row_idx, (criterion, data) in enumerate(matrix.items(), 1):
-                weight = data.get('weight', 0)
+                weight = data.get("weight", 0)
                 table.rows[row_idx].cells[0].text = f"{criterion}\n({weight} marks)"
-                
-                levels = data.get('levels', {})
-                level_names = ['Excellent', 'Good', 'Satisfactory', 'Needs Work']
-                
+
+                levels = data.get("levels", {})
+                level_names = ["Excellent", "Good", "Satisfactory", "Needs Work"]
+
                 for col_idx, level_name in enumerate(level_names):
-                    matching_key = [k for k in levels.keys() if level_name.lower() in k.lower()]
+                    matching_key = [
+                        k for k in levels.keys() if level_name.lower() in k.lower()
+                    ]
                     if matching_key:
                         # Include mark range in cell
                         key = matching_key[0]
                         # Extract mark range from key if present
                         mark_range = ""
                         import re
-                        range_match = re.search(r'\(([^)]+)\)', key)
+
+                        range_match = re.search(r"\(([^)]+)\)", key)
                         if range_match:
                             mark_range = f"[{range_match.group(1)}]\n"
-                        table.rows[row_idx].cells[col_idx + 1].text = f"{mark_range}{levels[key]}"
-            
+                        table.rows[row_idx].cells[
+                            col_idx + 1
+                        ].text = f"{mark_range}{levels[key]}"
+
             doc.add_paragraph()
-            
+
             # Marking guidelines
             guide_header = doc.add_paragraph()
             guide_header.add_run("Essay Marking Guidelines:").bold = True
-            
-            doc.add_paragraph("1. Read the entire essay before assigning marks", style='List Bullet')
-            doc.add_paragraph("2. Assess each criterion independently using the matrix", style='List Bullet')
-            doc.add_paragraph("3. Use the full range of marks within each level", style='List Bullet')
-            doc.add_paragraph("4. Provide written feedback highlighting strengths and areas for improvement", style='List Bullet')
-            doc.add_paragraph("5. Total marks = sum of all criteria scores", style='List Bullet')
-            
+
+            doc.add_paragraph(
+                "1. Read the entire essay before assigning marks", style="List Bullet"
+            )
+            doc.add_paragraph(
+                "2. Assess each criterion independently using the matrix",
+                style="List Bullet",
+            )
+            doc.add_paragraph(
+                "3. Use the full range of marks within each level", style="List Bullet"
+            )
+            doc.add_paragraph(
+                "4. Provide written feedback highlighting strengths and areas for improvement",
+                style="List Bullet",
+            )
+            doc.add_paragraph(
+                "5. Total marks = sum of all criteria scores", style="List Bullet"
+            )
+
             # Mark calculation box
             doc.add_paragraph()
             calc_header = doc.add_paragraph()
             calc_header.add_run("Mark Calculation:").bold = True
-            
+
             calc_table = doc.add_table(rows=len(matrix) + 2, cols=2)
-            calc_table.style = 'Table Grid'
-            
+            calc_table.style = "Table Grid"
+
             calc_table.rows[0].cells[0].text = "Criterion"
             calc_table.rows[0].cells[1].text = "Score"
             calc_table.rows[0].cells[0].paragraphs[0].runs[0].bold = True
             calc_table.rows[0].cells[1].paragraphs[0].runs[0].bold = True
-            
+
             for row_idx, (criterion, data) in enumerate(matrix.items(), 1):
-                calc_table.rows[row_idx].cells[0].text = f"{criterion} (max {data.get('weight', 0)})"
-                calc_table.rows[row_idx].cells[1].text = "_____ / " + str(data.get('weight', 0))
-            
+                calc_table.rows[row_idx].cells[
+                    0
+                ].text = f"{criterion} (max {data.get('weight', 0)})"
+                calc_table.rows[row_idx].cells[1].text = "_____ / " + str(
+                    data.get("weight", 0)
+                )
+
             # Total row
             total_row = len(matrix) + 1
             calc_table.rows[total_row].cells[0].text = "TOTAL"
             calc_table.rows[total_row].cells[0].paragraphs[0].runs[0].bold = True
             calc_table.rows[total_row].cells[1].text = f"_____ / {eq.get('marks', 50)}"
             calc_table.rows[total_row].cells[1].paragraphs[0].runs[0].bold = True
-    
+
     # ===== FOOTER =====
     doc.add_paragraph()
     doc.add_paragraph("_" * 60)
     footer = doc.add_paragraph()
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer.add_run(f"TOTAL EXAM MARKS: {exam_data['total_marks']}").bold = True
-    
+
     confidential = doc.add_paragraph()
     confidential.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = confidential.add_run("CONFIDENTIAL - FOR EXAMINER USE ONLY")
     run.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
     run.bold = True
-    
+
     # Save
     doc.save(str(output_path))
     return output_path
@@ -3578,21 +4054,18 @@ def create_memorandum_docx(exam_data: Dict[str, Any], output_path: Path) -> Path
 @app.post("/api/exams/generate")
 async def generate_exam(request: ExamGenerationRequest):
     """Generate complete History exam papers (1st and 2nd opportunity) with memorandums."""
-    
+
     print(f"[Exam Builder] Generating exam set for topics: {request.topics}")
-    
+
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        results = {
-            "first_opportunity": None,
-            "second_opportunity": None
-        }
-        
+        results = {"first_opportunity": None, "second_opportunity": None}
+
         # Generate both opportunities
         for opp in [1, 2]:
             opp_label = "1st" if opp == 1 else "2nd"
             print(f"[Exam Builder] === Generating {opp_label} Opportunity Exam ===")
-            
+
             exam_data = {
                 "module_code": request.module_code,
                 "module_name": request.module_name,
@@ -3603,73 +4076,92 @@ async def generate_exam(request: ExamGenerationRequest):
                 "source_questions": [],
                 "methodology_question": None,
                 "essay_question": None,
-                "created_at": datetime.now(timezone.utc).isoformat()
+                "created_at": datetime.now(timezone.utc).isoformat(),
             }
-            
+
             # Generate source-based questions (2 x 25 marks each = 50 marks)
             marks_per_source_question = 25
             for i, topic in enumerate(request.topics[:2]):
-                print(f"[Exam Builder] {opp_label} Opp - Source question {i+1}: {topic}")
-                
+                print(
+                    f"[Exam Builder] {opp_label} Opp - Source question {i + 1}: {topic}"
+                )
+
                 # Generate sources (different for 2nd opportunity)
-                sources_data = await generate_exam_sources(topic, i + 1, opportunity=opp)
-                sources = sources_data.get('sources', [])
-                
+                sources_data = await generate_exam_sources(
+                    topic, i + 1, opportunity=opp
+                )
+                sources = sources_data.get("sources", [])
+
                 # Generate questions
-                questions_data = await generate_source_questions(sources, topic, marks_per_source_question)
-                
-                exam_data["source_questions"].append({
-                    "question_number": i + 1,
-                    "topic": topic,
-                    "sources": sources,
-                    "questions": questions_data.get('questions', []),
-                    "total_marks": marks_per_source_question
-                })
-            
+                questions_data = await generate_source_questions(
+                    sources, topic, marks_per_source_question
+                )
+
+                exam_data["source_questions"].append(
+                    {
+                        "question_number": i + 1,
+                        "topic": topic,
+                        "sources": sources,
+                        "questions": questions_data.get("questions", []),
+                        "total_marks": marks_per_source_question,
+                    }
+                )
+
             # Generate methodology question (25 marks) - same for both opportunities
-            print(f"[Exam Builder] {opp_label} Opp - Methodology: {request.methodology_topic}")
-            exam_data["methodology_question"] = await generate_methodology_question(
-                request.methodology_topic, 
-                marks=25
+            print(
+                f"[Exam Builder] {opp_label} Opp - Methodology: {request.methodology_topic}"
             )
-            
+            exam_data["methodology_question"] = await generate_methodology_question(
+                request.methodology_topic, marks=25
+            )
+
             # Generate essay question (50 marks) - different for 2nd opportunity
             print(f"[Exam Builder] {opp_label} Opp - Essay: {request.essay_topic}")
             exam_data["essay_question"] = await generate_essay_question(
-                request.essay_topic,
-                marks=50,
-                opportunity=opp
+                request.essay_topic, marks=50, opportunity=opp
             )
-            
+
             # Calculate actual total
-            actual_total = sum(sq.get('total_marks', 0) for sq in exam_data['source_questions'])
-            actual_total += exam_data['methodology_question'].get('marks', 0) if exam_data['methodology_question'] else 0
-            actual_total += exam_data['essay_question'].get('marks', 0) if exam_data['essay_question'] else 0
-            exam_data['calculated_total'] = actual_total
-            
+            actual_total = sum(
+                sq.get("total_marks", 0) for sq in exam_data["source_questions"]
+            )
+            actual_total += (
+                exam_data["methodology_question"].get("marks", 0)
+                if exam_data["methodology_question"]
+                else 0
+            )
+            actual_total += (
+                exam_data["essay_question"].get("marks", 0)
+                if exam_data["essay_question"]
+                else 0
+            )
+            exam_data["calculated_total"] = actual_total
+
             # Generate DOCX files
             opp_suffix = "1stOpp" if opp == 1 else "2ndOpp"
-            
+
             # Exam paper
             filename = f"{request.module_code}_Exam_{opp_suffix}_{timestamp}.docx"
             output_path = OUTPUT_DIR / filename
             create_exam_docx(exam_data, output_path)
             exam_data["filename"] = filename
-            
+
             # Memorandum
             memo_filename = f"{request.module_code}_Memo_{opp_suffix}_{timestamp}.docx"
             memo_path = OUTPUT_DIR / memo_filename
             create_memorandum_docx(exam_data, memo_path)
             exam_data["memo_filename"] = memo_filename
-            
-            print(f"[Exam Builder] Generated {opp_label} Opp: {filename}, {memo_filename}")
-            
+
+            print(
+                f"[Exam Builder] Generated {opp_label} Opp: {filename}, {memo_filename}"
+            )
+
             # Store result
             if opp == 1:
                 results["first_opportunity"] = exam_data
             else:
                 results["second_opportunity"] = exam_data
-        
+
         # Store in database as a single record with both opportunities
         exam_record = {
             "module_code": request.module_code,
@@ -3682,10 +4174,10 @@ async def generate_exam(request: ExamGenerationRequest):
             # Legacy fields for backwards compatibility
             "filename": results["first_opportunity"]["filename"],
             "memo_filename": results["first_opportunity"]["memo_filename"],
-            "calculated_total": results["first_opportunity"]["calculated_total"]
+            "calculated_total": results["first_opportunity"]["calculated_total"],
         }
         result = db["exams"].insert_one(exam_record)
-        
+
         return {
             "success": True,
             "exam": {
@@ -3699,23 +4191,32 @@ async def generate_exam(request: ExamGenerationRequest):
                 "first_opportunity": {
                     "filename": results["first_opportunity"]["filename"],
                     "memo_filename": results["first_opportunity"]["memo_filename"],
-                    "source_questions": results["first_opportunity"]["source_questions"],
-                    "methodology_question": results["first_opportunity"]["methodology_question"],
-                    "essay_question": results["first_opportunity"]["essay_question"]
+                    "source_questions": results["first_opportunity"][
+                        "source_questions"
+                    ],
+                    "methodology_question": results["first_opportunity"][
+                        "methodology_question"
+                    ],
+                    "essay_question": results["first_opportunity"]["essay_question"],
                 },
                 "second_opportunity": {
                     "filename": results["second_opportunity"]["filename"],
                     "memo_filename": results["second_opportunity"]["memo_filename"],
-                    "source_questions": results["second_opportunity"]["source_questions"],
-                    "methodology_question": results["second_opportunity"]["methodology_question"],
-                    "essay_question": results["second_opportunity"]["essay_question"]
-                }
-            }
+                    "source_questions": results["second_opportunity"][
+                        "source_questions"
+                    ],
+                    "methodology_question": results["second_opportunity"][
+                        "methodology_question"
+                    ],
+                    "essay_question": results["second_opportunity"]["essay_question"],
+                },
+            },
         }
-        
+
     except Exception as e:
         print(f"[Exam Generation Error] {e}")
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -3724,14 +4225,14 @@ async def generate_exam(request: ExamGenerationRequest):
 async def download_exam(filename: str):
     """Download a generated exam paper."""
     file_path = OUTPUT_DIR / filename
-    
+
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Exam file not found")
-    
+
     return FileResponse(
         path=str(file_path),
         filename=filename,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
 
 
@@ -3746,4 +4247,5 @@ async def list_exams():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+
+    uvicorn.run(app, host="0.0.0.0", port=3001)
