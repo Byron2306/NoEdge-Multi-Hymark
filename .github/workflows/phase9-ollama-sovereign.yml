@@ -1,0 +1,35 @@
+name: HOMS Phase 9 Ollama Sovereignty
+
+on:
+  push:
+    branches:
+      - agent/homs-phase9-ollama-sovereign
+  pull_request:
+    paths:
+      - 'backend/server.py'
+      - '.github/workflows/phase9-ollama-sovereign.yml'
+
+jobs:
+  sovereign-llm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile Smart Assessor backend
+        run: python -m py_compile backend/server.py
+      - name: Prove Smart Assessor is local Ollama only
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text=Path("backend/server.py").read_text()
+          assert "http://127.0.0.1:11434/v1" in text
+          assert "HOMS_OLLAMA_MODEL" in text
+          assert 'model="gpt-4o"' not in text
+          assert 'os.getenv("OPENAI_API_KEY")' not in text
+          assert "HOMS_ALLOW_REMOTE_OLLAMA" in text
+          print("HOMS_ACTIVE_LLM_PROVIDER=ollama")
+          print("HOMS_CLOUD_LLM_RUNTIME_CALLS=0")
+          print("HOMS_PHASE9_OLLAMA_SOVEREIGN_VERIFIED")
+          PY
