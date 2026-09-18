@@ -1,6 +1,6 @@
 """
 Smart Assessor - AI-Powered Assignment Assessment System
-FastAPI Backend with OpenAI GPT Integration
+FastAPI Backend with Local Ollama Integration
 """
 
 import asyncio
@@ -15,6 +15,7 @@ import re
 import shutil
 import tempfile
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 import zipfile
 
 from bson import ObjectId
@@ -57,10 +58,41 @@ except ImportError:
 
 load_dotenv()
 
-# OpenAI client
+# Phase 9 sovereign LLM client.
+#
+# Ollama exposes an OpenAI-compatible local API. Keeping the client protocol
+# avoids rewriting the assessment call sites while eliminating OpenAI cloud
+# runtime dependence. No cloud fallback is permitted.
+HOMS_OLLAMA_BASE_URL = os.getenv(
+    "HOMS_OLLAMA_OPENAI_BASE_URL",
+    "http://127.0.0.1:11434/v1",
+).strip().rstrip("/")
+HOMS_OLLAMA_MODEL = (
+    os.getenv("HOMS_OLLAMA_MODEL")
+    or os.getenv("OLLAMA_MODEL")
+    or "qwen2.5:7b"
+).strip()
+
+_parsed_ollama = urlparse(HOMS_OLLAMA_BASE_URL)
+if (
+    _parsed_ollama.scheme not in {"http", "https"}
+    or not _parsed_ollama.hostname
+):
+    raise RuntimeError("HOMS_OLLAMA_OPENAI_BASE_URL must be a valid HTTP(S) URL.")
+
+if (
+    _parsed_ollama.hostname not in {"127.0.0.1", "localhost", "::1"}
+    and os.getenv("HOMS_ALLOW_REMOTE_OLLAMA", "0").strip().lower()
+    not in {"1", "true", "yes"}
+):
+    raise RuntimeError(
+        "Smart Assessor sovereign runtime refuses non-local Ollama. "
+        "Set HOMS_ALLOW_REMOTE_OLLAMA=1 only for a trusted LAN Ollama host."
+    )
 
 openai_client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY")
+    base_url=HOMS_OLLAMA_BASE_URL,
+    api_key="ollama-local",
 )
 
 # Document processing imports
@@ -272,7 +304,7 @@ IMPORTANT:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=HOMS_OLLAMA_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -616,7 +648,7 @@ GRADING APPROACH:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=HOMS_OLLAMA_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -3167,7 +3199,7 @@ Respond in JSON format:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=HOMS_OLLAMA_MODEL,
             messages=[
                 {
                     "role": "system",
@@ -3232,7 +3264,7 @@ Respond in JSON format:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=HOMS_OLLAMA_MODEL,
             messages=[
                 {
                     "role": "system",
@@ -3308,7 +3340,7 @@ Respond in JSON format:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=HOMS_OLLAMA_MODEL,
             messages=[
                 {
                     "role": "system",
@@ -3415,7 +3447,7 @@ Respond in JSON format:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=HOMS_OLLAMA_MODEL,
             messages=[
                 {
                     "role": "system",
