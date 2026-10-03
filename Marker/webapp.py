@@ -158,7 +158,7 @@ def static_files(filename):
 
 
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    app.run(port=5053, debug=True)
 from flask import Flask, request, redirect, url_for, send_from_directory, jsonify
 from pathlib import Path
 from homs.core.workflow_engine import WorkflowEngine
@@ -251,4 +251,4 @@ def get_report(filename):
 
 
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    app.run(port=5053, debug=True)

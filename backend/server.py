@@ -57,11 +57,14 @@ except ImportError:
 
 load_dotenv()
 
-# OpenAI client
+# OpenAI-compatible AI client. Defaults stay OpenAI/GPT-4o, but local
+# commercial runners can point this at providers such as NVIDIA NIM.
+AI_MODEL = os.getenv("HOMS_AI_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o"
+client_kwargs = {"api_key": os.getenv("OPENAI_API_KEY") or "missing-api-key"}
+if os.getenv("OPENAI_BASE_URL"):
+    client_kwargs["base_url"] = os.getenv("OPENAI_BASE_URL")
 
-openai_client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY")
-)
+openai_client = OpenAI(**client_kwargs)
 
 # Document processing imports
 try:
@@ -272,7 +275,7 @@ IMPORTANT:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=AI_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -616,7 +619,7 @@ GRADING APPROACH:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=AI_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -3167,7 +3170,7 @@ Respond in JSON format:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=AI_MODEL,
             messages=[
                 {
                     "role": "system",
@@ -3232,7 +3235,7 @@ Respond in JSON format:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=AI_MODEL,
             messages=[
                 {
                     "role": "system",
@@ -3308,7 +3311,7 @@ Respond in JSON format:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=AI_MODEL,
             messages=[
                 {
                     "role": "system",
@@ -3415,7 +3418,7 @@ Respond in JSON format:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=AI_MODEL,
             messages=[
                 {
                     "role": "system",
